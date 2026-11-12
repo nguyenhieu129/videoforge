@@ -1,0 +1,22 @@
+{
+  "name": "@videoforge/server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@videoforge/agents": "workspace:*",
+    "@videoforge/core": "workspace:*",
+    "@videoforge/engine-ffmpeg": "workspace:*",
+    "@videoforge/engine-hyperframes": "workspace:*",
+    "@videoforge/providers": "workspace:*",
+    "@videoforge/publishers": "workspace:*",
+    "@videoforge/templates": "workspace:*",
+    "@videoforge/voice": "workspace:*",
+    "fastify": "^5.1.0",
+    "zod": "^3.24.1"
+  }
+}

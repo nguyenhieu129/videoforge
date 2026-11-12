@@ -1,0 +1,26 @@
+{
+  "name": "videoforge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Công cụ tạo video tự động bằng pipeline 17 AI agent, kết hợp HyperFrames, GSAP, three.js, Remotion, Manim, Blender MCP và FFmpeg.",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "dev:server": "pnpm --filter @videoforge/server dev",
+    "dev:web": "pnpm --filter @videoforge/web dev",
+    "build": "pnpm -r run build",
+    "test": "vitest run",
+    "doctor": "tsx scripts/doctor.ts",
+    "env:doctor": "tsx scripts/doctor.ts",
+    "voice:smoke": "tsx scripts/voice-smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
