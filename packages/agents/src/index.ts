@@ -1082,7 +1082,8 @@ export async function runLintPreviewAgent(
   const aspects: Array<'16:9' | '9:16'> =
     ctx.aspect === 'both' ? ['16:9', '9:16'] : [ctx.aspect];
 
-  for (const sc of sceneBuilderOut.scenes) {
+  for (let sIdx = 0; sIdx < sceneBuilderOut.scenes.length; sIdx++) {
+    const sc = sceneBuilderOut.scenes[sIdx];
     const scriptScene = script.scenes.find((s) => s.id === sc.sceneId) || script.scenes[0];
     const sbScene = storyboard.scenes.find((s) => s.id === sc.sceneId) || storyboard.scenes[0];
 
@@ -1102,6 +1103,8 @@ export async function runLintPreviewAgent(
         durationSec: 1,
         headline: scriptScene.onScreenText,
         subline: scriptScene.segments[0]?.text || '',
+        sceneIndex: sIdx,
+        dataPoints: scriptScene.dataPoints,
         palette: sbScene.palette,
         segments: scriptScene.segments,
       });
@@ -1152,12 +1155,14 @@ export async function runRendererAgent(
 
   const tasks: Array<{
     scene: SceneBuilderOutput['scenes'][number];
+    sceneIndex: number;
     aspect: '16:9' | '9:16';
   }> = [];
 
-  for (const sc of sceneBuilderOut.scenes) {
+  for (let sIdx = 0; sIdx < sceneBuilderOut.scenes.length; sIdx++) {
+    const sc = sceneBuilderOut.scenes[sIdx];
     for (const asp of aspects) {
-      tasks.push({ scene: sc, aspect: asp });
+      tasks.push({ scene: sc, sceneIndex: sIdx, aspect: asp });
     }
   }
 
@@ -1173,7 +1178,7 @@ export async function runRendererAgent(
   for (let i = 0; i < tasks.length; i += concurrency) {
     const batch = tasks.slice(i, i + concurrency);
     const batchResults = await Promise.all(
-      batch.map(async ({ scene, aspect }) => {
+      batch.map(async ({ scene, sceneIndex, aspect }) => {
         const scriptScene = script.scenes.find((s) => s.id === scene.sceneId) || script.scenes[0];
         const sbScene = storyboard.scenes.find((s) => s.id === scene.sceneId) || storyboard.scenes[0];
         const outMp4 = path.join(scene.dirPath, `clip_${aspect.replace(':', 'x')}.mp4`);
@@ -1227,6 +1232,8 @@ export async function runRendererAgent(
             durationSec: scene.durationSec,
             headline: scriptScene.onScreenText,
             subline,
+            sceneIndex,
+            dataPoints: scriptScene.dataPoints,
             palette: sbScene.palette,
             segments: scriptScene.segments,
           });

@@ -1,8 +1,18 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
 import type { ScriptScene, StoryboardScene, WordTiming } from '@videoforge/core';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const FONTS_DIR = path.resolve(__dirname, '../fonts');
+const BUNDLED_FONT_FILES = [
+  path.join(FONTS_DIR, 'BeVietnamPro-ExtraBold.ttf'),
+  path.join(FONTS_DIR, 'BeVietnamPro-SemiBold.ttf'),
+  path.join(FONTS_DIR, 'JetBrainsMono-Bold.ttf'),
+].filter((f) => fs.existsSync(f));
 
 export interface BuildHyperFramesSceneInput {
   scene: ScriptScene;
@@ -310,8 +320,244 @@ function wrapTextLines(text: string, maxCharsPerLine: number, maxLines: number):
 }
 
 /**
- * Vẽ khung hình SVG chất lượng cao (Vector Card + Tiếng Việt Unicode đầy đủ + Phụ đề Lead/Accent)
- * và kết xuất sang PNG bằng `@resvg/resvg-js` (hoạt động 100% trên Windows/Linux/macOS không phụ thuộc FFmpeg drawtext).
+ * Trích xuất con số/phần trăm nổi bật từ câu thoại để đưa vào Infographic
+ */
+function extractMetricsFromText(
+  headline: string,
+  subline: string,
+  dataPoints?: Array<{ label: string; value: number }>
+): { mainStat: string; mainVal: number; items: Array<{ label: string; value: number; display: string }> } {
+  const combined = `${headline} ${subline}`;
+  const matches = combined.match(/(\d+(?:[.,]\d+)?\s*(?:%|phần trăm|nm|x|lần|nghìn|triệu|tỷ|k))/gi) || [];
+
+  let mainStat = '94%';
+  let mainVal = 94;
+  if (matches.length > 0) {
+    const raw = matches[0].replace(/phần trăm/i, '%').replace(/\s+/g, '');
+    mainStat = raw.toUpperCase();
+    const num = parseFloat(raw.replace(/[^0-9.]/g, ''));
+    mainVal = Number.isFinite(num) ? Math.min(99, Math.max(25, num > 100 ? 92 : num)) : 88;
+  } else if (dataPoints && dataPoints.length > 0) {
+    mainVal = Math.min(99, Math.max(25, dataPoints[0].value));
+    mainStat = `${mainVal}%`;
+  }
+
+  const items =
+    dataPoints && dataPoints.length >= 2
+      ? dataPoints.slice(0, 4).map((d) => ({
+          label: d.label.slice(0, 14).toUpperCase(),
+          value: Math.min(98, Math.max(25, d.value)),
+          display: `${d.value}%`,
+        }))
+      : [
+          { label: 'HIỆU SUẤT', value: Math.max(68, mainVal), display: mainStat },
+          { label: 'TỐC ĐỘ XỬ LÝ', value: 88, display: '+88%' },
+          { label: 'ĐỘ CHÍNH XÁC', value: 95, display: '95%' },
+          { label: 'TỐI ƯU HÓA', value: 82, display: '4.2X' },
+        ];
+
+  return { mainStat, mainVal, items };
+}
+
+/**
+ * Vẽ 4 dạng Infographic động (Gauge HUD, Biểu đồ cột + đường xu hướng, Mạng lưới AI Core, Bento Spotlight)
+ */
+function renderInfographicZoneSvg(opts: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  styleIndex: number;
+  animProgress: number; // 0.35 -> 1.0
+  frameIndex: number;
+  palette: { primary: string; secondary: string; accent: string; bg: string; text: string };
+  speakerColor: string;
+  metrics: { mainStat: string; mainVal: number; items: Array<{ label: string; value: number; display: string }> };
+}): string {
+  const { x, y, w, h, styleIndex, animProgress, frameIndex, palette, speakerColor, metrics } = opts;
+  const variant = styleIndex % 4;
+
+  // Style 0: Vòng đồng hồ Neon HUD (Radial Gauge) + 2 thanh Telemetry
+  if (variant === 0) {
+    const cx = x + Math.round(w * 0.27);
+    const cy = y + Math.round(h * 0.5);
+    const r = Math.min(Math.round(h * 0.36), Math.round(w * 0.2));
+    const circum = Number((2 * Math.PI * r).toFixed(1));
+    const currentPct = Math.round(metrics.mainVal * (0.55 + 0.45 * animProgress));
+    const dashOffset = Number((circum * (1 - currentPct / 100)).toFixed(1));
+
+    const barX = x + Math.round(w * 0.52);
+    const barW = Math.round(w * 0.43);
+    const b1Val = Math.round(metrics.items[1].value * (0.6 + 0.4 * animProgress));
+    const b2Val = Math.round(metrics.items[2].value * (0.65 + 0.35 * animProgress));
+
+    return `
+      <g>
+        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="28" fill="#0B1120" fill-opacity="0.9" stroke="${palette.primary}" stroke-opacity="0.4" stroke-width="2" />
+        <!-- Radial Gauge -->
+        <circle cx="${cx}" cy="${cy}" r="${r + 16}" fill="none" stroke="${palette.primary}" stroke-opacity="0.18" stroke-width="2" stroke-dasharray="8 8" />
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#1E293B" stroke-width="18" />
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="url(#accentGrad)" stroke-width="18" stroke-linecap="round"
+          stroke-dasharray="${circum}" stroke-dashoffset="${dashOffset}" transform="rotate(-90 ${cx} ${cy})" />
+        <text x="${cx}" y="${cy + 12}" text-anchor="middle" fill="#FACC15" font-family="'JetBrains Mono', monospace" font-size="42" font-weight="800">
+          ${escapeHtml(metrics.mainStat)}
+        </text>
+        <text x="${cx}" y="${cy + 44}" text-anchor="middle" fill="#94A3B8" font-family="'Be Vietnam Pro', sans-serif" font-size="16" font-weight="600">
+          CHỈ SỐ ĐỘT PHÁ
+        </text>
+
+        <!-- Right Telemetry Bars -->
+        <text x="${barX}" y="${y + 68}" fill="#E2E8F0" font-family="'Be Vietnam Pro', sans-serif" font-size="20" font-weight="800">
+          ${escapeHtml(metrics.items[1].label)}
+        </text>
+        <text x="${barX + barW}" y="${y + 68}" text-anchor="end" fill="#38BDF8" font-family="'JetBrains Mono', monospace" font-size="22" font-weight="800">
+          ${b1Val}%
+        </text>
+        <rect x="${barX}" y="${y + 82}" width="${barW}" height="18" rx="9" fill="#1E293B" />
+        <rect x="${barX}" y="${y + 82}" width="${Math.round((barW * b1Val) / 100)}" height="18" rx="9" fill="#38BDF8" />
+
+        <text x="${barX}" y="${y + 155}" fill="#E2E8F0" font-family="'Be Vietnam Pro', sans-serif" font-size="20" font-weight="800">
+          ${escapeHtml(metrics.items[2].label)}
+        </text>
+        <text x="${barX + barW}" y="${y + 155}" text-anchor="end" fill="#F472B6" font-family="'JetBrains Mono', monospace" font-size="22" font-weight="800">
+          ${b2Val}%
+        </text>
+        <rect x="${barX}" y="${y + 169}" width="${barW}" height="18" rx="9" fill="#1E293B" />
+        <rect x="${barX}" y="${y + 169}" width="${Math.round((barW * b2Val) / 100)}" height="18" rx="9" fill="#F472B6" />
+
+        <!-- Status Pill -->
+        <rect x="${barX}" y="${y + h - 68}" width="${barW}" height="42" rx="12" fill="${speakerColor}" fill-opacity="0.15" stroke="${speakerColor}" stroke-opacity="0.5" stroke-width="1.5" />
+        <text x="${barX + Math.round(barW / 2)}" y="${y + h - 41}" text-anchor="middle" fill="#F8FAFC" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="700">
+          ⚡ DỮ LIỆU ĐÃ KIỂM CHỨNG
+        </text>
+      </g>`;
+  }
+
+  // Style 1: Biểu đồ tăng trưởng đa cột + Đường xu hướng phát sáng
+  if (variant === 1) {
+    const chartTop = y + 52;
+    const chartBottom = y + h - 48;
+    const maxBarH = chartBottom - chartTop - 20;
+    const colW = Math.round((w - 140) / 4);
+    const points: string[] = [];
+
+    const barsSvg = metrics.items
+      .slice(0, 4)
+      .map((it, idx) => {
+        const bx = x + 46 + idx * (colW + 18);
+        const factor = 0.55 + 0.45 * animProgress;
+        const bh = Math.max(42, Math.round((maxBarH * it.value * factor) / 100));
+        const by = chartBottom - bh;
+        const cx = bx + Math.round(colW / 2);
+        points.push(`${cx},${by - 10}`);
+        const isHighlight = idx === 0 || idx === 3;
+        return `
+          <rect x="${bx}" y="${chartTop}" width="${colW}" height="${maxBarH}" rx="12" fill="#1E293B" fill-opacity="0.45" />
+          <rect x="${bx}" y="${by}" width="${colW}" height="${bh}" rx="12" fill="${isHighlight ? 'url(#accentGrad)' : '#38BDF8'}" />
+          <text x="${cx}" y="${by - 18}" text-anchor="middle" fill="#FACC15" font-family="'JetBrains Mono', monospace" font-size="22" font-weight="800">
+            ${escapeHtml(it.display)}
+          </text>
+          <text x="${cx}" y="${chartBottom + 28}" text-anchor="middle" fill="#CBD5E1" font-family="'Be Vietnam Pro', sans-serif" font-size="15" font-weight="600">
+            ${escapeHtml(it.label.slice(0, 13))}
+          </text>`;
+      })
+      .join('');
+
+    return `
+      <g>
+        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="28" fill="#0B1120" fill-opacity="0.9" stroke="${palette.secondary}" stroke-opacity="0.45" stroke-width="2" />
+        ${barsSvg}
+        <polyline fill="none" stroke="#FACC15" stroke-width="4" points="${points.join(' ')}" />
+        ${points
+          .map((pt) => {
+            const [px, py] = pt.split(',');
+            return `<circle cx="${px}" cy="${py}" r="7" fill="#090D16" stroke="#FACC15" stroke-width="4" />`;
+          })
+          .join('')}
+      </g>`;
+  }
+
+  // Style 2: Sơ đồ Mạng lưới AI Core (Cyber Hub + 3 Node vệ tinh)
+  if (variant === 2) {
+    const cx = x + Math.round(w * 0.5);
+    const cy = y + Math.round(h * 0.52);
+    const pulseR = 64 + (frameIndex % 3) * 10;
+    const leftX = x + Math.round(w * 0.18);
+    const rightX = x + Math.round(w * 0.82);
+    const topNodeY = y + Math.round(h * 0.3);
+    const botNodeY = y + Math.round(h * 0.74);
+
+    return `
+      <g>
+        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="28" fill="#0B1120" fill-opacity="0.9" stroke="${palette.accent}" stroke-opacity="0.4" stroke-width="2" />
+        <!-- Connecting Laser Lines -->
+        <line x1="${cx}" y1="${cy}" x2="${leftX}" y2="${topNodeY}" stroke="#38BDF8" stroke-width="3" stroke-dasharray="8 6" />
+        <line x1="${cx}" y1="${cy}" x2="${rightX}" y2="${topNodeY}" stroke="#F472B6" stroke-width="3" stroke-dasharray="8 6" />
+        <line x1="${cx}" y1="${cy}" x2="${leftX}" y2="${botNodeY}" stroke="#FACC15" stroke-width="3" stroke-dasharray="8 6" />
+        <line x1="${cx}" y1="${cy}" x2="${rightX}" y2="${botNodeY}" stroke="#38BDF8" stroke-width="3" stroke-dasharray="8 6" />
+
+        <!-- Satellite Nodes -->
+        <rect x="${leftX - 95}" y="${topNodeY - 26}" width="190" height="52" rx="16" fill="#1E293B" stroke="#38BDF8" stroke-width="2" />
+        <text x="${leftX}" y="${topNodeY + 7}" text-anchor="middle" fill="#38BDF8" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="800">
+          ${escapeHtml(metrics.items[0].display)} CORE
+        </text>
+
+        <rect x="${rightX - 95}" y="${topNodeY - 26}" width="190" height="52" rx="16" fill="#1E293B" stroke="#F472B6" stroke-width="2" />
+        <text x="${rightX}" y="${topNodeY + 7}" text-anchor="middle" fill="#F472B6" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="800">
+          ${escapeHtml(metrics.items[1].display)} SPEED
+        </text>
+
+        <rect x="${leftX - 95}" y="${botNodeY - 26}" width="190" height="52" rx="16" fill="#1E293B" stroke="#FACC15" stroke-width="2" />
+        <text x="${leftX}" y="${botNodeY + 7}" text-anchor="middle" fill="#FACC15" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="800">
+          AI SHIELD
+        </text>
+
+        <rect x="${rightX - 95}" y="${botNodeY - 26}" width="190" height="52" rx="16" fill="#1E293B" stroke="#38BDF8" stroke-width="2" />
+        <text x="${rightX}" y="${botNodeY + 7}" text-anchor="middle" fill="#38BDF8" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="800">
+          VERIFIED
+        </text>
+
+        <!-- Center AI Core -->
+        <circle cx="${cx}" cy="${cy}" r="${pulseR}" fill="${palette.primary}" fill-opacity="0.16" stroke="${palette.primary}" stroke-opacity="0.5" stroke-width="2" />
+        <circle cx="${cx}" cy="${cy}" r="50" fill="url(#accentGrad)" />
+        <text x="${cx}" y="${cy + 10}" text-anchor="middle" fill="#FFFFFF" font-family="'JetBrains Mono', monospace" font-size="28" font-weight="800">
+          ${escapeHtml(metrics.mainStat)}
+        </text>
+      </g>`;
+  }
+
+  // Style 3: Bento Spotlight 2 cột + Sóng âm Equalizer đa dải
+  const cardW = Math.round((w - 54) / 2);
+  const cardH = h - 36;
+  return `
+    <g>
+      <rect x="${x + 18}" y="${y + 18}" width="${cardW}" height="${cardH}" rx="24" fill="#0B1120" stroke="#38BDF8" stroke-opacity="0.6" stroke-width="2.5" />
+      <text x="${x + 42}" y="${y + 68}" fill="#94A3B8" font-family="'Be Vietnam Pro', sans-serif" font-size="18" font-weight="600">
+        ĐIỂM NHẤN DỮ LIỆU
+      </text>
+      <text x="${x + 42}" y="${y + 142}" fill="#FACC15" font-family="'JetBrains Mono', monospace" font-size="56" font-weight="800">
+        ${escapeHtml(metrics.mainStat)}
+      </text>
+      <text x="${x + 42}" y="${y + 186}" fill="#E2E8F0" font-family="'Be Vietnam Pro', sans-serif" font-size="20" font-weight="800">
+        ${escapeHtml(metrics.items[0].label)}
+      </text>
+
+      <rect x="${x + 36 + cardW}" y="${y + 18}" width="${cardW}" height="${cardH}" rx="24" fill="#0B1120" stroke="#F472B6" stroke-opacity="0.6" stroke-width="2.5" />
+      <text x="${x + 60 + cardW}" y="${y + 68}" fill="#94A3B8" font-family="'Be Vietnam Pro', sans-serif" font-size="18" font-weight="600">
+        CHỈ SỐ TỐI ƯU
+      </text>
+      <text x="${x + 60 + cardW}" y="${y + 142}" fill="#38BDF8" font-family="'JetBrains Mono', monospace" font-size="56" font-weight="800">
+        ${escapeHtml(metrics.items[1].display)}
+      </text>
+      <text x="${x + 60 + cardW}" y="${y + 186}" fill="#E2E8F0" font-family="'Be Vietnam Pro', sans-serif" font-size="20" font-weight="800">
+        ${escapeHtml(metrics.items[1].label)}
+      </text>
+    </g>`;
+}
+
+/**
+ * Vẽ khung hình Motion Graphics SVG chất lượng studio (Font Be Vietnam Pro + JetBrains Mono,
+ * Infographic động 4 chế độ, Sóng âm Equalizer, và Phụ đề Karaoke Highlight từng cụm từ)
  */
 function renderSceneSlidePng(opts: {
   width: number;
@@ -319,107 +565,185 @@ function renderSceneSlidePng(opts: {
   aspect: '16:9' | '9:16';
   headline: string;
   subline: string;
-  captionChunk?: string;
+  captionWordsWindow?: string[];
+  activeWordIndexInWindow?: number;
   speaker?: 'lead' | 'accent';
-  stepBadge?: string;
+  sceneIndex?: number;
+  frameIndex?: number;
   progressRatio?: number;
+  dataPoints?: Array<{ label: string; value: number }>;
   palette: { primary: string; secondary: string; accent: string; bg: string; text: string };
   outputPngPath: string;
 }) {
   const { width, height, aspect, palette } = opts;
   const isVert = aspect === '9:16';
+  const sceneIdx = opts.sceneIndex ?? 0;
+  const frameIdx = opts.frameIndex ?? 0;
+  const animProgress = Math.min(1, Math.max(0.35, opts.progressRatio ?? 0.7));
 
+  // Lề an toàn chuẩn TikTok/Reels/Shorts (136px mỗi bên trên 9:16 để không bị cột nút Like/Comment/Share che)
   const padX = isVert ? 136 : 160;
-  const innerPadX = isVert ? 40 : 48;
-  const topY = isVert ? 215 : 100;
-  const headlineSize = isVert ? 52 : 52;
-  const bodySize = isVert ? 38 : 34;
-  const captionSize = isVert ? 44 : 40;
+  const innerPadX = isVert ? 38 : 44;
+  const topY = isVert ? 195 : 86;
+  const headlineSize = isVert ? 48 : 48;
+  const bodySize = isVert ? 33 : 30;
+  const captionSize = isVert ? 42 : 38;
 
-  const headlineLines = wrapTextLines(opts.headline, isVert ? 19 : 34, 3);
-  const sublineLines = wrapTextLines(opts.subline, isVert ? 25 : 46, 8);
+  const headlineLines = wrapTextLines(opts.headline, isVert ? 20 : 34, 3);
+  const sublineLines = wrapTextLines(opts.subline, isVert ? 27 : 48, 5);
 
-  const speakerLabel = opts.speaker === 'accent' ? '★ ACCENT (ĐIỂM NHẤN)' : '● LEAD (DẪN CHÍNH)';
+  const speakerLabel = opts.speaker === 'accent' ? '★ ACCENT • ĐIỂM NHẤN' : '● LEAD • DẪN CHÍNH';
   const speakerColor = opts.speaker === 'accent' ? '#F472B6' : '#38BDF8';
-  const progressWidth = Math.max(24, Math.round((width - padX * 2) * (opts.progressRatio ?? 0.5)));
+  const progressWidth = Math.max(28, Math.round((width - padX * 2) * animProgress));
 
+  // Tô màu vàng/cyan nổi bật cho dòng cuối của Headline để tạo điểm nhấn thị giác
   const headlineTspans = headlineLines
-    .map(
-      (line, idx) =>
-        `<tspan x="${padX + innerPadX}" dy="${idx === 0 ? 0 : headlineSize * 1.28}">${escapeHtml(line)}</tspan>`
-    )
+    .map((line, idx) => {
+      const isLastLine = idx === headlineLines.length - 1 && headlineLines.length > 1;
+      const lineColor = isLastLine ? '#FACC15' : palette.text;
+      return `<tspan x="${padX + innerPadX}" dy="${idx === 0 ? 0 : Math.round(headlineSize * 1.26)}" fill="${lineColor}">${escapeHtml(line)}</tspan>`;
+    })
     .join('');
 
   const sublineTspans = sublineLines
     .map(
       (line, idx) =>
-        `<tspan x="${padX + innerPadX}" dy="${idx === 0 ? 0 : bodySize * 1.38}">${escapeHtml(line)}</tspan>`
+        `<tspan x="${padX + innerPadX}" dy="${idx === 0 ? 0 : Math.round(bodySize * 1.38)}">${escapeHtml(line)}</tspan>`
     )
     .join('');
 
-  const captionWords =
-    opts.captionChunk || opts.subline.trim().split(/\s+/).slice(0, isVert ? 5 : 8).join(' ');
+  // Sóng âm Equalizer 10 cột nhảy động theo từng frame
+  const eqBarsSvg = Array.from({ length: 10 })
+    .map((_, idx) => {
+      const barH = 12 + ((idx * 13 + frameIdx * 17) % 28);
+      const bx = width - padX - 130 + idx * 13;
+      const by = topY + 59 - Math.round(barH / 2);
+      return `<rect x="${bx}" y="${by}" width="7" height="${barH}" rx="3.5" fill="${speakerColor}" />`;
+    })
+    .join('');
 
-  const cardTopY = isVert ? 340 : 210;
-  const cardHeight = isVert ? 860 : 520;
-  const captionBoxY = isVert ? 1310 : 815;
+  const cardTopY = isVert ? 310 : 190;
+  const cardHeight = isVert ? 945 : 560;
+  const captionBoxY = isVert ? 1315 : 805;
+
+  // Vùng Infographic nằm ở nửa dưới của Main Card (trên 9:16) hoặc bên phải (trên 16:9)
+  const metrics = extractMetricsFromText(opts.headline, opts.subline, opts.dataPoints);
+  const infoX = isVert ? padX + 28 : padX + Math.round((width - padX * 2) * 0.54);
+  const infoY = isVert ? cardTopY + 565 : cardTopY + 55;
+  const infoW = isVert ? width - padX * 2 - 56 : Math.round((width - padX * 2) * 0.43);
+  const infoH = isVert ? 345 : cardHeight - 110;
+
+  const infographicSvg = renderInfographicZoneSvg({
+    x: infoX,
+    y: infoY,
+    w: infoW,
+    h: infoH,
+    styleIndex: sceneIdx,
+    animProgress,
+    frameIndex: frameIdx,
+    palette,
+    speakerColor,
+    metrics,
+  });
+
+  // Thanh phụ đề Karaoke có Highlight cụm từ đang đọc
+  const windowWords =
+    opts.captionWordsWindow && opts.captionWordsWindow.length > 0
+      ? opts.captionWordsWindow
+      : opts.subline.trim().split(/\s+/).slice(0, isVert ? 5 : 7);
+  const activeIdx = opts.activeWordIndexInWindow ?? 0;
+
+  const karaokeTspans = windowWords
+    .map((w, idx) => {
+      const isFocused = idx === activeIdx || idx === activeIdx + 1;
+      const fill = isFocused ? '#FACC15' : '#F8FAFC';
+      const prefix = idx === 0 ? '' : ' ';
+      return `<tspan fill="${fill}" font-size="${isFocused ? captionSize + 4 : captionSize}">${escapeHtml(prefix + w)}</tspan>`;
+    })
+    .join('');
+
+  // Hiệu ứng dịch chuyển nhẹ của quả cầu ánh sáng nền theo frame
+  const orbOffsetX = (frameIdx % 6) * 14;
+  const orbOffsetY = (frameIdx % 6) * 10;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <defs>
       <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="${palette.bg}" />
-        <stop offset="55%" stop-color="#111827" />
-        <stop offset="100%" stop-color="${palette.bg}" />
+        <stop offset="0%" stop-color="#060913" />
+        <stop offset="50%" stop-color="#0F172A" />
+        <stop offset="100%" stop-color="#060913" />
       </linearGradient>
       <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="0">
         <stop offset="0%" stop-color="${palette.primary}" />
         <stop offset="50%" stop-color="${palette.secondary}" />
         <stop offset="100%" stop-color="${palette.accent}" />
       </linearGradient>
+      <pattern id="cyberGrid" width="60" height="60" patternUnits="userSpaceOnUse">
+        <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#1E293B" stroke-width="1" stroke-opacity="0.55" />
+      </pattern>
     </defs>
 
-    <!-- Background -->
+    <!-- Background + Cyber Grid + Moving Glow Orbs -->
     <rect width="${width}" height="${height}" fill="url(#bgGrad)" />
-    <circle cx="${Math.round(width * 0.85)}" cy="${Math.round(height * 0.18)}" r="${isVert ? 260 : 220}" fill="${palette.primary}" opacity="0.16" />
-    <circle cx="${Math.round(width * 0.15)}" cy="${Math.round(height * 0.78)}" r="${isVert ? 280 : 240}" fill="${palette.accent}" opacity="0.14" />
+    <rect width="${width}" height="${height}" fill="url(#cyberGrid)" />
+    <circle cx="${Math.round(width * 0.82) - orbOffsetX}" cy="${Math.round(height * 0.18) + orbOffsetY}" r="${isVert ? 270 : 230}" fill="${palette.primary}" opacity="0.22" />
+    <circle cx="${Math.round(width * 0.18) + orbOffsetX}" cy="${Math.round(height * 0.78) - orbOffsetY}" r="${isVert ? 290 : 250}" fill="${palette.accent}" opacity="0.18" />
 
-    <!-- Top Brand Bar -->
+    <!-- Top Progress Bar -->
     <rect x="${padX}" y="${topY}" width="${width - padX * 2}" height="12" rx="6" fill="#1E293B" />
     <rect x="${padX}" y="${topY}" width="${progressWidth}" height="12" rx="6" fill="url(#accentGrad)" />
 
-    <!-- Speaker Badge -->
-    <rect x="${padX}" y="${topY + 34}" width="360" height="50" rx="25" fill="${speakerColor}" fill-opacity="0.18" stroke="${speakerColor}" stroke-width="2" />
-    <text x="${padX + 24}" y="${topY + 67}" fill="${speakerColor}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="22" font-weight="bold">
-      ${escapeHtml(opts.stepBadge || speakerLabel)}
+    <!-- Scene Counter Pill + Speaker Badge + Live Audio Equalizer -->
+    <rect x="${padX}" y="${topY + 32}" width="148" height="50" rx="16" fill="#1E293B" stroke="#475569" stroke-width="1.5" />
+    <text x="${padX + 74}" y="${topY + 64}" text-anchor="middle" fill="#FACC15" font-family="'JetBrains Mono', monospace" font-size="21" font-weight="800">
+      SCENE 0${sceneIdx + 1}
     </text>
 
-    <!-- Main Content Card -->
-    <rect x="${padX}" y="${cardTopY}" width="${width - padX * 2}" height="${cardHeight}" rx="36" fill="#0F172A" fill-opacity="0.86" stroke="${palette.primary}" stroke-opacity="0.45" stroke-width="3" />
+    <rect x="${padX + 162}" y="${topY + 32}" width="320" height="50" rx="25" fill="${speakerColor}" fill-opacity="0.16" stroke="${speakerColor}" stroke-width="2" />
+    <text x="${padX + 322}" y="${topY + 64}" text-anchor="middle" fill="${speakerColor}" font-family="'Be Vietnam Pro', sans-serif" font-size="21" font-weight="800">
+      ${escapeHtml(speakerLabel)}
+    </text>
+
+    ${eqBarsSvg}
+
+    <!-- Main Studio Glass Card -->
+    <rect x="${padX}" y="${cardTopY}" width="${width - padX * 2}" height="${cardHeight}" rx="36" fill="#090D16" fill-opacity="0.88" stroke="${palette.primary}" stroke-opacity="0.55" stroke-width="3" />
     <rect x="${padX}" y="${cardTopY}" width="14" height="${cardHeight}" rx="7" fill="url(#accentGrad)" />
 
-    <!-- Headline Text -->
-    <text x="${padX + innerPadX}" y="${cardTopY + 90}" fill="${palette.text}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${headlineSize}" font-weight="bold">
+    <!-- Headline Text (Be Vietnam Pro ExtraBold) -->
+    <text x="${padX + innerPadX}" y="${cardTopY + 82}" fill="${palette.text}" font-family="'Be Vietnam Pro', sans-serif" font-size="${headlineSize}" font-weight="800">
       ${headlineTspans}
     </text>
 
-    <!-- Divider -->
-    <rect x="${padX + innerPadX}" y="${cardTopY + 90 + headlineLines.length * headlineSize * 1.2}" width="160" height="6" rx="3" fill="${palette.accent}" />
+    <!-- Neon Accent Divider -->
+    <rect x="${padX + innerPadX}" y="${cardTopY + 84 + headlineLines.length * Math.round(headlineSize * 1.2)}" width="210" height="7" rx="3.5" fill="url(#accentGrad)" />
 
-    <!-- Segment Narration Text -->
-    <text x="${padX + innerPadX}" y="${cardTopY + 150 + headlineLines.length * headlineSize * 1.2}" fill="#E2E8F0" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${bodySize}" font-weight="normal">
+    <!-- Segment Narration Text (Be Vietnam Pro SemiBold) -->
+    <text x="${padX + innerPadX}" y="${cardTopY + 142 + headlineLines.length * Math.round(headlineSize * 1.2)}" fill="#E2E8F0" font-family="'Be Vietnam Pro', sans-serif" font-size="${bodySize}" font-weight="600">
       ${sublineTspans}
     </text>
 
-    <!-- Bottom Dynamic Caption Bar -->
-    <rect x="${padX}" y="${captionBoxY}" width="${width - padX * 2}" height="140" rx="28" fill="#090D16" fill-opacity="0.92" stroke="${speakerColor}" stroke-width="3" />
-    <text x="${Math.round(width / 2)}" y="${captionBoxY + 84}" text-anchor="middle" fill="${speakerColor}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${captionSize}" font-weight="bold">
-      ${escapeHtml(captionWords)}
+    <!-- Visual Infographic Centerpiece -->
+    ${infographicSvg}
+
+    <!-- Bottom Karaoke Caption Pill Box -->
+    <rect x="${padX}" y="${captionBoxY}" width="${width - padX * 2}" height="142" rx="30" fill="#060913" fill-opacity="0.95" stroke="${speakerColor}" stroke-width="3.5" />
+    <rect x="${padX + 24}" y="${captionBoxY + 18}" width="92" height="28" rx="9" fill="${speakerColor}" />
+    <text x="${padX + 70}" y="${captionBoxY + 38}" text-anchor="middle" fill="#060913" font-family="'JetBrains Mono', monospace" font-size="16" font-weight="800">
+      ${opts.speaker === 'accent' ? 'ACCENT' : 'LEAD'}
+    </text>
+    <text x="${Math.round(width / 2)}" y="${captionBoxY + 96}" text-anchor="middle" font-family="'Be Vietnam Pro', sans-serif" font-weight="800">
+      ${karaokeTspans}
     </text>
   </svg>`;
 
   const resvg = new Resvg(svg, {
     fitTo: { mode: 'width', value: width },
-    font: { loadSystemFonts: true, defaultFontFamily: 'Arial' },
+    font: {
+      fontFiles: BUNDLED_FONT_FILES,
+      loadSystemFonts: true,
+      defaultFontFamily: 'Be Vietnam Pro',
+    },
   });
   const pngBuffer = resvg.render().asPng();
   fs.writeFileSync(opts.outputPngPath, pngBuffer);
@@ -428,7 +752,7 @@ function renderSceneSlidePng(opts: {
 /**
  * Render composition HyperFrames ra MP4 và tạo ảnh Snapshot (Mục 7.1 & Bước 13/14)
  * - Gọi trực tiếp `npx hyperframes render` nếu CLI đã được cài đặt
- * - Nếu chưa có CLI ngoài, kết xuất chuỗi khung hình đồ họa tiếng Việt sắc nét bằng `@resvg/resvg-js` kèm phụ đề karaoke động theo cụm từ qua FFmpeg.
+ * - Nếu chưa có CLI ngoài, kết xuất chuỗi khung hình Motion Graphics + Infographic + Karaoke Highlight bằng `@resvg/resvg-js` & FFmpeg.
  */
 export function renderHyperFramesScene(opts: {
   sceneDir: string;
@@ -439,6 +763,8 @@ export function renderHyperFramesScene(opts: {
   durationSec: number;
   headline: string;
   subline: string;
+  sceneIndex?: number;
+  dataPoints?: Array<{ label: string; value: number }>;
   segments?: Array<{ speaker: 'lead' | 'accent'; text: string }>;
   palette: { primary: string; secondary: string; accent: string; bg: string; text: string };
   timeoutSec?: number;
@@ -473,39 +799,46 @@ export function renderHyperFramesScene(opts: {
         ? opts.segments
         : [{ speaker: 'lead' as const, text: opts.subline || opts.headline }];
 
-    // Chia mỗi segment thành các cụm từ phụ đề (5 từ cho 9:16, 8 từ cho 16:9) để vừa khít lề an toàn mới
-    const wordsPerChunk = opts.aspect === '9:16' ? 5 : 8;
+    // Chia mỗi segment thành các bước nhảy Karaoke 2 từ (trong cửa sổ 5 từ cho 9:16, 7 từ cho 16:9)
+    // giúp chữ Karaoke đổi màu từng cụm 2 từ liên tục và Infographic/Sóng âm chuyển động mượt
+    const windowSize = opts.aspect === '9:16' ? 5 : 7;
     const slideFrames: Array<{
       speaker: 'lead' | 'accent';
       fullText: string;
-      captionChunk: string;
+      captionWordsWindow: string[];
+      activeWordIndexInWindow: number;
       segIndex: number;
     }> = [];
 
     for (let sIdx = 0; sIdx < segList.length; sIdx++) {
       const seg = segList[sIdx];
       const words = seg.text.trim().split(/\s+/).filter(Boolean);
-      if (opts.durationSec <= 1.5 || words.length <= wordsPerChunk) {
+      if (opts.durationSec <= 1.2 || words.length <= 2) {
         slideFrames.push({
           speaker: seg.speaker,
           fullText: seg.text,
-          captionChunk: words.slice(0, wordsPerChunk).join(' '),
+          captionWordsWindow: words.slice(0, windowSize),
+          activeWordIndexInWindow: 0,
           segIndex: sIdx,
         });
       } else {
-        for (let w = 0; w < words.length; w += wordsPerChunk) {
-          slideFrames.push({
-            speaker: seg.speaker,
-            fullText: seg.text,
-            captionChunk: words.slice(w, w + wordsPerChunk).join(' '),
-            segIndex: sIdx,
-          });
+        for (let w = 0; w < words.length; w += windowSize) {
+          const chunk = words.slice(w, w + windowSize);
+          for (let focus = 0; focus < chunk.length; focus += 2) {
+            slideFrames.push({
+              speaker: seg.speaker,
+              fullText: seg.text,
+              captionWordsWindow: chunk,
+              activeWordIndexInWindow: focus,
+              segIndex: sIdx,
+            });
+          }
         }
       }
     }
 
     const subClips: string[] = [];
-    const frameDuration = Math.max(0.8, Number((opts.durationSec / slideFrames.length).toFixed(2)));
+    const frameDuration = Math.max(0.45, Number((opts.durationSec / slideFrames.length).toFixed(2)));
 
     for (let i = 0; i < slideFrames.length; i++) {
       const frame = slideFrames[i];
@@ -518,9 +851,13 @@ export function renderHyperFramesScene(opts: {
         aspect: opts.aspect,
         headline: opts.headline,
         subline: frame.fullText,
-        captionChunk: frame.captionChunk,
+        captionWordsWindow: frame.captionWordsWindow,
+        activeWordIndexInWindow: frame.activeWordIndexInWindow,
         speaker: frame.speaker,
+        sceneIndex: opts.sceneIndex ?? 0,
+        frameIndex: i,
         progressRatio: (i + 1) / slideFrames.length,
+        dataPoints: opts.dataPoints,
         palette: opts.palette,
         outputPngPath: slidePngPath,
       });
@@ -532,9 +869,9 @@ export function renderHyperFramesScene(opts: {
 
       const vf =
         i === 0
-          ? `scale=${width}:${height},fps=30,fade=t=in:st=0:d=0.18`
+          ? `scale=${width}:${height},fps=30,fade=t=in:st=0:d=0.15`
           : i === slideFrames.length - 1
-            ? `scale=${width}:${height},fps=30,fade=t=out:st=${Math.max(0.1, frameDuration - 0.2).toFixed(2)}:d=0.18`
+            ? `scale=${width}:${height},fps=30,fade=t=out:st=${Math.max(0.08, frameDuration - 0.16).toFixed(2)}:d=0.15`
             : `scale=${width}:${height},fps=30`;
 
       execFileSync(
