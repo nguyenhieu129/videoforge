@@ -164,6 +164,111 @@ export function extractJsonObject(raw: string): any {
 }
 
 /**
+ * Chuẩn hóa thông minh JSON từ các model (AllCombo / Gemini / Claude / GPT) về đúng key của Zod Schema
+ */
+function normalizeLlmPayload(rawObj: any): any {
+  if (!rawObj || typeof rawObj !== 'object' || Array.isArray(rawObj)) return rawObj;
+  const obj = { ...rawObj };
+
+  // Nếu LLM bọc trong { script: {...} } hoặc { data: {...} }
+  if (obj.script && typeof obj.script === 'object' && Array.isArray(obj.script.scenes)) {
+    Object.assign(obj, obj.script);
+  } else if (obj.data && typeof obj.data === 'object' && !Array.isArray(obj.data)) {
+    Object.assign(obj, obj.data);
+  }
+
+  // Chuẩn hóa CleanArticle
+  if (!obj.keyFacts && Array.isArray(obj.facts || obj.key_facts || obj.highlights)) {
+    obj.keyFacts = (obj.facts || obj.key_facts || obj.highlights).map((f: any) => String(f));
+  }
+  if (!obj.body && typeof (obj.content || obj.cleanedText || obj.text) === 'string') {
+    obj.body = obj.content || obj.cleanedText || obj.text;
+  }
+
+  // Chuẩn hóa Analysis
+  if (!obj.hookAngles && Array.isArray(obj.hooks || obj.hook_angles)) {
+    obj.hookAngles = (obj.hooks || obj.hook_angles).map((h: any) => String(h));
+  }
+
+  // Chuẩn hóa Script scenes[]
+  if (Array.isArray(obj.scenes)) {
+    const firstScene = obj.scenes[0];
+    const isStoryboard =
+      firstScene && (firstScene.engine || firstScene.layout || firstScene.palette || firstScene.visualNotes);
+
+    if (!isStoryboard) {
+      obj.hook = String(obj.hook || obj.intro || obj.opening || firstScene?.onScreenText || firstScene?.title || 'Điểm nhấn quan trọng');
+      obj.cta = String(obj.cta || obj.outro || obj.callToAction || 'Theo dõi và để lại bình luận về góc nhìn của bạn!');
+      obj.scenes = obj.scenes.map((sc: any, idx: number) => {
+        const rawSegments = Array.isArray(sc.segments)
+          ? sc.segments
+          : Array.isArray(sc.dialogue || sc.lines || sc.voiceover)
+            ? sc.dialogue || sc.lines || sc.voiceover
+            : typeof (sc.text || sc.narration || sc.script || sc.content) === 'string'
+              ? [{ speaker: idx % 2 === 0 ? 'lead' : 'accent', text: sc.text || sc.narration || sc.script || sc.content }]
+              : [];
+
+        const segments = rawSegments
+          .map((seg: any, sIdx: number) => {
+            if (typeof seg === 'string') {
+              return { speaker: sIdx % 2 === 0 ? 'lead' : 'accent', text: seg };
+            }
+            const spkRaw = String(seg?.speaker || seg?.role || seg?.voice || '').toLowerCase();
+            const speaker: 'lead' | 'accent' = spkRaw.includes('accent') || spkRaw.includes('2') || spkRaw.includes('sub') ? 'accent' : 'lead';
+            const text = String(seg?.text || seg?.line || seg?.content || seg?.dialogue || '').trim();
+            return {
+              speaker,
+              text,
+              ...(seg?.emphasis ? { emphasis: String(seg.emphasis) } : {}),
+            };
+          })
+          .filter((seg: any) => seg.text.length > 0);
+
+        const rawDuration = Number(sc.durationSec ?? sc.duration ?? sc.duration_sec ?? sc.time ?? 6);
+        const durationSec = Number.isFinite(rawDuration) ? Math.min(40, Math.max(3, rawDuration)) : 6;
+
+        const onScreenText = String(
+          sc.onScreenText || sc.on_screen_text || sc.headline || sc.title || sc.heading || segments[0]?.text || `Điểm nhấn ${idx + 1}`
+        ).trim();
+
+        let dataPoints: Array<{ label: string; value: number }> | undefined;
+        if (Array.isArray(sc.dataPoints || sc.data_points || sc.metrics || sc.stats)) {
+          const rawDp = sc.dataPoints || sc.data_points || sc.metrics || sc.stats;
+          dataPoints = rawDp
+            .map((d: any) => ({
+              label: String(d?.label || d?.name || d?.title || 'Chỉ số').slice(0, 24),
+              value: Math.min(99, Math.max(15, Number(String(d?.value ?? d?.score ?? 88).replace(/[^0-9.]/g, '')) || 88)),
+            }))
+            .slice(0, 4);
+        }
+
+        return {
+          id: String(sc.id || sc.sceneId || `scene_${idx + 1}`),
+          durationSec,
+          onScreenText,
+          segments: segments.length > 0 ? segments : [{ speaker: 'lead', text: onScreenText }],
+          ...(dataPoints && dataPoints.length > 0 ? { dataPoints } : {}),
+        };
+      });
+    }
+  }
+
+  return obj;
+}
+
+function deepMergeLlmWithFallback(baseFallback: any, llmObj: any): any {
+  if (!baseFallback || typeof baseFallback !== 'object') return llmObj;
+  const result: Record<string, any> = { ...baseFallback };
+  for (const [k, v] of Object.entries(llmObj)) {
+    if (v !== undefined && v !== null && v !== '') {
+      result[k] = v;
+    }
+  }
+  return result;
+}
+
+
+/**
  * Gọi OpenAI-compatible / 9router (VD: AllCombo / ag/gemini-3.8-flash-high):
  * Nếu gateway không hỗ trợ `response_format: { type: 'json_object' }`, tự động gọi lại không có `response_format`.
  */
@@ -308,7 +413,8 @@ export async function generateStructured<T extends z.ZodTypeAny>(
       }
 
       const parsedJson = extractJsonObject(rawText);
-      const validated = opts.schema.safeParse(parsedJson);
+      const normalizedJson = normalizeLlmPayload(parsedJson);
+      const validated = opts.schema.safeParse(normalizedJson);
 
       if (validated.success) {
         return {
@@ -322,10 +428,10 @@ export async function generateStructured<T extends z.ZodTypeAny>(
         };
       }
 
-      // Nếu LLM trả về JSON gần đúng nhưng lệch 1-2 trường nhỏ, merge thông minh với fallbackGenerator để giữ nội dung của LLM
-      if (opts.fallbackGenerator && parsedJson && typeof parsedJson === 'object') {
+      // Nếu LLM trả về JSON gần đúng nhưng thiếu 1-2 trường phụ, merge sâu với fallbackGenerator để giữ tối đa nội dung sáng tạo của LLM
+      if (opts.fallbackGenerator && normalizedJson && typeof normalizedJson === 'object') {
         const baseFallback = opts.fallbackGenerator();
-        const merged = { ...baseFallback, ...parsedJson };
+        const merged = deepMergeLlmWithFallback(baseFallback, normalizedJson);
         const mergedCheck = opts.schema.safeParse(merged);
         if (mergedCheck.success) {
           return {

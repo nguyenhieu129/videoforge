@@ -207,8 +207,15 @@ export async function runCleanerAgent(
     provider: ctx.provider,
     model: ctx.model,
     temperature: ctx.temperature ?? 0.2,
-    systemPrompt:
-      'Bạn là Cleaner Agent trong hệ thống sản xuất video VideoForge. Nhiệm vụ: làm sạch bài viết, loại bỏ quảng cáo/rác và rút trích danh sách dữ kiện chính xác (keyFacts). Trả về JSON đúng schema CleanArticle {title, body, keyFacts[], images[]}.',
+    systemPrompt: `Bạn là Cleaner Agent trong hệ thống sản xuất video VideoForge.
+Nhiệm vụ: Làm sạch bài viết, loại bỏ quảng cáo/rác và rút trích 4-6 dữ kiện cốt lõi có con số hoặc điểm nhấn cụ thể (keyFacts).
+Trả về DUY NHẤT JSON đúng cấu trúc:
+{
+  "title": "Tiêu đề ngắn gọn sắc bén",
+  "body": "Nội dung bài viết đã làm sạch",
+  "keyFacts": ["Dữ kiện 1", "Dữ kiện 2", "Dữ kiện 3", "Dữ kiện 4"],
+  "images": []
+}`,
     userPrompt: `Hãy làm sạch bài viết có tiêu đề "${rawArticle.title}".`,
     untrustedContent: rawArticle.text,
     schema: CleanArticleSchema,
@@ -216,12 +223,11 @@ export async function runCleanerAgent(
     fallbackGenerator: () => {
       const sentences = splitSentences(rawArticle.text);
       const keyFacts =
-        sentences.length >= 3
-          ? sentences.slice(0, 5)
+        sentences.length >= 2
+          ? sentences.slice(0, 6)
           : [
               rawArticle.title,
-              rawArticle.text.slice(0, 180),
-              'Dữ liệu được chuẩn hóa phục vụ sản xuất video tự động với 2 giọng đọc Lead & Accent.',
+              rawArticle.text.slice(0, 220),
             ];
       return {
         title: rawArticle.title,
@@ -255,23 +261,33 @@ export async function runAnalyzerAgent(
     provider: ctx.provider,
     model: ctx.model,
     temperature: ctx.temperature ?? 0.3,
-    systemPrompt:
-      'Bạn là Analyzer Agent. Hãy phân tích bài viết để tìm topic, audience, tone, hookAngles[] và risks[]. Trả về JSON đúng schema Analysis.',
+    systemPrompt: `Bạn là Analyzer Agent. Hãy phân tích bài viết để tìm chủ đề, khán giả, tông giọng và 3 góc Hook độc đáo.
+Trả về DUY NHẤT JSON đúng cấu trúc:
+{
+  "topic": "Chủ đề trọng tâm",
+  "audience": "Nhóm khán giả mục tiêu",
+  "tone": "Tông giọng (VD: Kịch tính, Chuyên gia công nghệ, Châm biếm sắc sảo, Truyền cảm hứng)",
+  "hookAngles": ["Góc mở đầu 1", "Góc mở đầu 2", "Góc mở đầu 3"],
+  "risks": ["Lưu ý kiểm chứng số liệu"]
+}`,
     userPrompt: `Tiêu đề: ${cleanArticle.title}\nCác dữ kiện chính:\n- ${cleanArticle.keyFacts.join('\n- ')}`,
     untrustedContent: cleanArticle.body,
     schema: AnalysisSchema,
     onLog: (lvl, msg) => ctx.log(lvl, msg),
-    fallbackGenerator: () => ({
-      topic: cleanArticle.title,
-      audience: 'Người xem quan tâm tin tức công nghệ, kiến thức thực tiễn và xu hướng mới',
-      tone: 'Năng động, sắc bén, giàu thông tin',
-      hookAngles: [
-        `Điều ít ai ngờ tới đằng sau: ${cleanArticle.title}`,
-        `Con số thực sự ẩn sau câu chuyện ${cleanArticle.title}`,
-        `Tại sao ${cleanArticle.title} đang thay đổi hoàn toàn cuộc chơi?`,
-      ],
-      risks: ['Cần giữ nguyên các con số từ bài gốc, tránh suy diễn quá đà'],
-    }),
+    fallbackGenerator: () => {
+      const firstFact = cleanArticle.keyFacts[0] || cleanArticle.title;
+      return {
+        topic: cleanArticle.title,
+        audience: 'Người xem quan tâm xu hướng công nghệ và phân tích chuyên sâu',
+        tone: 'Năng động, sắc bén, giàu điểm nhấn',
+        hookAngles: [
+          firstFact,
+          `Bước ngoặt thực sự đằng sau: ${cleanArticle.title}`,
+          `Con số biết nói từ câu chuyện ${cleanArticle.title}`,
+        ],
+        risks: ['Giữ nguyên các con số từ bài gốc'],
+      };
+    },
   });
 
   ctx.log('info', `Đã xác định tông giọng: "${res.data.tone}" với ${res.data.hookAngles.length} góc Hook.`);
@@ -299,8 +315,18 @@ export async function runScorerAgent(
     provider: ctx.provider,
     model: ctx.model,
     temperature: ctx.temperature ?? 0.2,
-    systemPrompt:
-      'Bạn là Scorer Agent. Chấm điểm tiềm năng chuyển thể thành video ngắn theo thang 0-10 cho từng tiêu chí: hook, novelty, clarity, controversy, visualizability. Trả về JSON đúng schema Score.',
+    systemPrompt: `Bạn là Scorer Agent. Chấm điểm tiềm năng chuyển thể thành video ngắn theo thang 0-10.
+Trả về DUY NHẤT JSON đúng cấu trúc:
+{
+  "total": 8.2,
+  "hook": 8.5,
+  "novelty": 8.0,
+  "clarity": 8.5,
+  "controversy": 7.0,
+  "visualizability": 8.5,
+  "verdict": "pass",
+  "reasons": ["Lý do 1", "Lý do 2"]
+}`,
     userPrompt: `Chủ đề: ${analysis.topic}\nGóc hook: ${analysis.hookAngles.join(' | ')}\nDữ kiện: ${cleanArticle.keyFacts.join('; ')}`,
     schema: ScoreSchema,
     onLog: (lvl, msg) => ctx.log(lvl, msg),
@@ -376,14 +402,24 @@ export async function runStrategistAgent(
     provider: ctx.provider,
     model: ctx.model,
     temperature: ctx.temperature ?? 0.4,
-    systemPrompt:
-      'Bạn là Strategist Agent. Dựa trên Analysis và Score, hãy chọn format, durationSec (15-90s), style, pacing, aspect, castMode. Trả về JSON đúng schema Strategy.',
+    systemPrompt: `Bạn là Strategist Agent. Dựa trên Analysis và Score, hãy chọn chiến lược sản xuất video.
+Trả về DUY NHẤT JSON đúng cấu trúc:
+{
+  "format": "explainer",
+  "durationSec": 28,
+  "style": "${preset.id}",
+  "pacing": "snappy",
+  "aspect": "${ctx.aspect}",
+  "castMode": "${ctx.castMode}"
+}
+Lưu ý: format chỉ nhận 1 trong: "news_brief", "explainer", "storytelling", "data_ranking", "debate".
+pacing chỉ nhận 1 trong: "snappy", "smooth", "bouncy", "cinematic".`,
     userPrompt: `Chủ đề: ${analysis.topic}\nTone: ${analysis.tone}\nĐiểm: ${score.total}\nAspect yêu cầu: ${ctx.aspect}\nStyle preset: ${ctx.stylePreset}`,
     schema: StrategySchema,
     onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => ({
-      format: 'news_brief',
-      durationSec: 24,
+      format: 'explainer',
+      durationSec: 26,
       style: preset.id,
       pacing: preset.motionStyle,
       aspect: ctx.aspect,
@@ -412,6 +448,18 @@ export async function runStrategistAgent(
 }
 
 /**
+ * Hàm băm chuỗi tạo seed ổn định theo nội dung từng bài viết
+ */
+function hashTopicSeed(input: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
+}
+
+/**
  * 6. Scriptwriter Agent: Viết kịch bản phân cảnh 2 giọng Lead & Accent (Mục 6.3 & Mục 8.3)
  */
 export async function runScriptwriterAgent(
@@ -423,84 +471,134 @@ export async function runScriptwriterAgent(
   ctx.log('info', `Đang biên kịch phân cảnh với chế độ 2 giọng (${strategy.castMode})...`);
 
   const tone = analysis?.tone || 'Sắc bén, lôi cuốn';
-  const systemPrompt = `Bạn là biên kịch video ngắn. Viết kịch bản dựa CHỈ trên dữ kiện trong bài gốc.
+  const systemPrompt = `Bạn là biên kịch video ngắn triệu view. Hãy thiết kế kịch bản độc đáo, giàu nhịp điệu, bám sát dữ kiện bài gốc.
 Yêu cầu:
-- Hook 3 giây đầu gây tò mò, không clickbait sai sự thật.
-- Chia cảnh, mỗi cảnh có segments[] với speaker là 'lead' hoặc 'accent' (tỉ lệ lead ~65%, accent ~35%), onScreenText ngắn (<= 8 từ).
-- Tổng thời lượng: ${strategy.durationSec}s. Tông giọng: ${tone}.
-- Không bịa số liệu. Nếu thiếu dữ kiện thì bỏ qua.
-Trả về JSON đúng schema Script. Không thêm văn bản ngoài JSON.`;
+- Tùy theo độ dài và số lượng luận điểm của bài viết, hãy chia từ 3 đến 5 cảnh (scenes) có vai trò khác nhau (VD: Cảnh mở màn bùng nổ -> Cảnh bóc tách con số/đối lập -> Cảnh cơ chế hoạt động -> Cảnh kết luận đắt giá).
+- Tuyệt đối KHÔNG dùng những câu khuôn mẫu nhàm chán như "Bạn có biết điều gì đang thực sự diễn ra với...". Hãy đi thẳng vào số liệu gây sốc, nghịch lý, hoặc câu hỏi xoáy trực diện vào chủ đề!
+- Mỗi cảnh có:
+  + "id": "scene_1", "scene_2", ...
+  + "durationSec": số giây (4 đến 9)
+  + "onScreenText": Tiêu đề cực ngắn, đắt giá, mang tính điểm nhấn thị giác (tối đa 4-7 từ, ưu tiên có con số hoặc động từ mạnh)
+  + "segments": mảng lời thoại đối đáp/tung hứng giữa "lead" (giọng dẫn chính ~65%) và "accent" (giọng nhấn điểm mấu chốt ~35%). Trong trường "emphasis", ghi rõ cụm từ khóa/con số quan trọng nhất của câu đó (2-4 từ) để hệ thống đồ họa làm hiệu ứng Highlight!
+  + "dataPoints": mảng 2-3 chỉ số minh họa thực tế rút từ cảnh đó [{"label": "Tên chỉ số ngắn", "value": 92}].
+- Trả về DUY NHẤT 1 JSON object theo đúng mẫu sau:
+{
+  "hook": "Câu mở đầu 3 giây cực gắt",
+  "scenes": [
+    {
+      "id": "scene_1",
+      "durationSec": 6,
+      "onScreenText": "TIÊU ĐỀ NGẮN ĐẮT GIÁ",
+      "segments": [
+        { "speaker": "accent", "text": "Câu thoại mở đầu ấn tượng mạnh.", "emphasis": "TỪ KHÓA CHÍNH" },
+        { "speaker": "lead", "text": "Câu dẫn giải sắc bén đi thẳng vào trọng tâm.", "emphasis": "CON SỐ ĐỘT PHÁ" }
+      ],
+      "dataPoints": [
+        { "label": "TỐC ĐỘ", "value": 94 },
+        { "label": "HIỆU SUẤT", "value": 88 }
+      ]
+    }
+  ],
+  "cta": "Câu kêu gọi tương tác cuối video"
+}`;
 
   const res = await generateStructured({
     provider: ctx.provider,
     model: ctx.model,
-    temperature: ctx.temperature ?? 0.6,
+    temperature: ctx.temperature ?? 0.65,
     systemPrompt,
-    userPrompt: `Tiêu đề: ${cleanArticle.title}\nCác dữ kiện chính:\n${cleanArticle.keyFacts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`,
+    userPrompt: `Tiêu đề: ${cleanArticle.title}\nĐịnh dạng: ${strategy.format} | Tông giọng: ${tone}\nCác dữ kiện chính:\n${cleanArticle.keyFacts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`,
     untrustedContent: cleanArticle.body,
     schema: ScriptSchema,
     onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => {
-      const f0 = cleanArticle.keyFacts[0] || cleanArticle.title;
-      const f1 = cleanArticle.keyFacts[1] || 'Phân tích chuyên sâu từ dữ liệu gốc của bài viết.';
-      const f2 = cleanArticle.keyFacts[2] || 'Ứng dụng thực tiễn giúp tối ưu hóa hiệu suất vượt trội.';
+      // Bộ sinh kịch bản dự phòng ĐỘNG 100% theo dữ kiện bài viết (không dùng câu mẫu cố định)
+      const bodySentences = splitSentences(cleanArticle.body);
+      const rawFacts = [
+        ...cleanArticle.keyFacts,
+        ...bodySentences.filter((s) => !cleanArticle.keyFacts.includes(s)),
+      ].filter((s) => s && s.trim().length > 10);
+
+      const uniqueFacts = Array.from(new Set(rawFacts));
+      const seed = hashTopicSeed(cleanArticle.title + (cleanArticle.body.slice(0, 120) || ''));
+      const desiredSceneCount = Math.min(5, Math.max(3, Math.min(uniqueFacts.length, 3 + (seed % 3))));
+
+      const scenes: Script['scenes'] = [];
+      for (let idx = 0; idx < desiredSceneCount; idx++) {
+        const factA = uniqueFacts[idx * 2] || uniqueFacts[idx] || cleanArticle.title;
+        const factB = uniqueFacts[idx * 2 + 1] || uniqueFacts[(idx + 1) % Math.max(1, uniqueFacts.length)] || '';
+
+        // Rút trích cụm từ khóa nhấn (số liệu hoặc 3 từ đầu/cuối mạnh nhất)
+        const numMatch = factA.match(/\d+(?:[.,]\d+)?\s*(?:%|x|lần|nm|tỷ|triệu|k|giây|phút|giờ)?/i);
+        const wordsA = factA.replace(/[.,:;!?()"']/g, '').trim().split(/\s+/);
+        const emphasisA = numMatch ? numMatch[0].toUpperCase() : wordsA.slice(0, 3).join(' ').toUpperCase();
+        const wordsB = factB.replace(/[.,:;!?()"']/g, '').trim().split(/\s+/);
+        const emphasisB = wordsB.slice(0, 3).join(' ').toUpperCase();
+
+        // Tạo tiêu đề ngắn gọn khác nhau cho mỗi cảnh dựa trên dữ kiện của cảnh đó
+        const headlineSource = idx === 0 ? cleanArticle.title : factA;
+        const cleanHeadline = trimToMaxWords(
+          headlineSource.replace(/^(theo|với|nhưng|tuy nhiên|bên cạnh đó|ngoài ra)\s+/i, ''),
+          6
+        );
+
+        const segs: Script['scenes'][number]['segments'] = [];
+        if (idx === 0) {
+          segs.push({
+            speaker: 'accent',
+            text: analysis?.hookAngles?.[0] || factA,
+            emphasis: emphasisA,
+          });
+          if (factB && factB !== factA) {
+            segs.push({
+              speaker: 'lead',
+              text: factB,
+              emphasis: emphasisB,
+            });
+          }
+        } else if (idx === desiredSceneCount - 1) {
+          segs.push({
+            speaker: 'lead',
+            text: factA,
+            emphasis: emphasisA,
+          });
+          segs.push({
+            speaker: 'accent',
+            text: factB && factB !== factA ? factB : `Đây chính là bước chuyển dịch quan trọng nhất đối với ${trimToMaxWords(cleanArticle.title, 5)}.`,
+            emphasis: emphasisB || 'ĐỘT PHÁ MỚI',
+          });
+        } else {
+          segs.push({
+            speaker: idx % 2 === 1 ? 'lead' : 'accent',
+            text: factA,
+            emphasis: emphasisA,
+          });
+          if (factB && factB !== factA) {
+            segs.push({
+              speaker: idx % 2 === 1 ? 'accent' : 'lead',
+              text: factB,
+              emphasis: emphasisB,
+            });
+          }
+        }
+
+        const baseVal = 76 + ((seed + idx * 11) % 22);
+        scenes.push({
+          id: `scene_${idx + 1}`,
+          durationSec: 5 + ((seed + idx) % 3),
+          onScreenText: cleanHeadline,
+          segments: segs,
+          dataPoints: [
+            { label: emphasisA.slice(0, 14) || 'TÁC ĐỘNG', value: baseVal },
+            { label: (emphasisB || 'TỐC ĐỘ').slice(0, 14), value: Math.max(62, baseVal - 9) },
+          ],
+        });
+      }
 
       return {
-        hook: `Sự thật bất ngờ về ${cleanArticle.title}!`,
-        scenes: [
-          {
-            id: 'scene_1',
-            durationSec: 6,
-            onScreenText: trimToMaxWords(cleanArticle.title, 7),
-            segments: [
-              {
-                speaker: 'accent',
-                text: `Bạn có biết điều gì đang thực sự diễn ra với ${cleanArticle.title}?`,
-                emphasis: 'hook',
-              },
-              {
-                speaker: 'lead',
-                text: `Hãy cùng điểm qua những dữ kiện quan trọng nhất vừa được công bố.`,
-              },
-            ],
-          },
-          {
-            id: 'scene_2',
-            durationSec: 7,
-            onScreenText: trimToMaxWords(f0, 7),
-            segments: [
-              {
-                speaker: 'lead',
-                text: f0,
-              },
-              {
-                speaker: 'lead',
-                text: f1,
-              },
-            ],
-            dataPoints: [
-              { label: 'Hiệu suất', value: 92 },
-              { label: 'Tốc độ', value: 85 },
-            ],
-          },
-          {
-            id: 'scene_3',
-            durationSec: 6,
-            onScreenText: trimToMaxWords(f2, 7),
-            segments: [
-              {
-                speaker: 'accent',
-                text: f2,
-                emphasis: 'highlight',
-              },
-              {
-                speaker: 'lead',
-                text: 'Đừng quên theo dõi để cập nhật những phân tích mới nhất mỗi ngày!',
-              },
-            ],
-          },
-        ],
-        cta: 'Theo dõi kênh và để lại bình luận về góc nhìn của bạn!',
+        hook: analysis?.hookAngles?.[0] || uniqueFacts[0] || cleanArticle.title,
+        scenes,
+        cta: 'Để lại bình luận về góc nhìn của bạn và theo dõi kênh ngay!',
       };
     },
   });
@@ -511,7 +609,7 @@ Trả về JSON đúng schema Script. Không thêm văn bản ngoài JSON.`;
     scenes: res.data.scenes.map((sc, idx) => ({
       ...sc,
       id: sc.id || `scene_${idx + 1}`,
-      onScreenText: trimToMaxWords(sc.onScreenText || cleanArticle.title, 8),
+      onScreenText: trimToMaxWords(sc.onScreenText || cleanArticle.title, 7),
     })),
   };
 
@@ -588,20 +686,29 @@ export async function runFactCheckerAgent(
 }
 
 /**
+ * Bộ 6 bảng màu Studio Neon đa dạng để mỗi video / mỗi chủ đề mang bản sắc thị giác riêng biệt
+ */
+const DYNAMIC_STUDIO_PALETTES = [
+  { primary: '#38BDF8', secondary: '#818CF8', accent: '#F472B6', bg: '#060913', text: '#F8FAFC' }, // Cyber Cyan & Rose
+  { primary: '#F59E0B', secondary: '#EF4444', accent: '#FACC15', bg: '#09070F', text: '#FEFCE8' }, // Solar Flare & Crimson
+  { primary: '#10B981', secondary: '#06B6D4', accent: '#A3E635', bg: '#040D12', text: '#ECFDF5' }, // Emerald Matrix & Lime
+  { primary: '#A855F7', secondary: '#EC4899', accent: '#38BDF8', bg: '#090514', text: '#FAF5FF' }, // Quantum Violet & Pink
+  { primary: '#F43F5E', secondary: '#FB923C', accent: '#38BDF8', bg: '#0C060B', text: '#FFF1F2' }, // Crimson Pulse & Electric Blue
+  { primary: '#3B82F6', secondary: '#2DD4BF', accent: '#FACC15', bg: '#050A18', text: '#EFF6FF' }, // Cobalt Velocity & Gold
+];
+
+/**
  * 8. Director Agent: Thiết kế Storyboard, chọn Engine, Layout, Bảng màu (Mục 2, 6, 7)
- * Quy tắc mặc định Mục 2: Nếu không có lý do đặc biệt, cảnh dùng HyperFrames + GSAP (+ three.js khi cần 3D).
+ * Mỗi video và mỗi cảnh được chọn bố cục (7 kiến trúc khác nhau) dựa trên nội dung thực tế của cảnh + topic seed!
  */
 export async function runDirectorAgent(
   ctx: AgentExecutionContext,
   script: Script,
   strategy: Strategy
 ): Promise<AgentStepResult<Storyboard>> {
-  ctx.log('info', 'Đang đạo diễn Storyboard, bố cục và chọn engine cho từng cảnh...');
+  ctx.log('info', 'Đang đạo diễn Storyboard: phân tích nội dung từng cảnh để chọn Layout & Bảng màu riêng biệt...');
 
-  const preset = STYLE_PRESETS.find((p) => p.id === strategy.style) || STYLE_PRESETS[0];
-  const palette = ctx.brandPalette || preset.palette;
-
-  const layouts: Array<
+  const allLayouts: Array<
     | 'hero_headline'
     | 'split_comparison'
     | 'stat_spotlight'
@@ -609,31 +716,88 @@ export async function runDirectorAgent(
     | 'kinetic_typography'
     | 'threejs_particles'
     | 'chart_data'
-  > = ['hero_headline', 'stat_spotlight', 'kinetic_typography', 'threejs_particles', 'quote_card'];
+  > = [
+    'kinetic_typography',
+    'stat_spotlight',
+    'split_comparison',
+    'chart_data',
+    'threejs_particles',
+    'quote_card',
+    'hero_headline',
+  ];
 
   const transitions: Array<'fade' | 'slide_up' | 'zoom_burst' | 'glitch' | 'wipe'> = [
     'zoom_burst',
     'slide_up',
     'wipe',
+    'glitch',
     'fade',
   ];
 
+  const seed = hashTopicSeed(`${ctx.title}_${script.hook}_${ctx.runId}`);
+  const basePalette =
+    ctx.brandPalette || DYNAMIC_STUDIO_PALETTES[seed % DYNAMIC_STUDIO_PALETTES.length];
+
+  const usedLayouts = new Set<string>();
+
   const storyboardScenes = script.scenes.map((sc, idx) => {
-    const layout = layouts[idx % layouts.length];
+    const combinedText = `${sc.onScreenText} ${sc.segments.map((s) => s.text).join(' ')}`.toLowerCase();
+    const hasNumbers = /(\d+(?:[.,]\d+)?\s*(?:%|phần trăm|x|lần|tỷ|triệu|nm|k|giây|năm))/i.test(combinedText);
+    const hasContrast = /(nhưng|tuy nhiên|ngược lại|so với|trong khi|thay vì|đột phá|khác biệt|cũ|mới|thách thức|giải pháp)/i.test(combinedText);
+    const hasSteps = /(bước|quy trình|cách|cơ chế|giai đoạn|hệ thống|tự động|luồng|pipeline)/i.test(combinedText);
+
+    // Chọn layout thông minh theo ý nghĩa nội dung của cảnh và không lặp lại cảnh trước
+    const candidates: typeof allLayouts = [];
+    if (idx === 0) {
+      candidates.push('kinetic_typography', 'hero_headline', 'split_comparison');
+    } else if (hasNumbers) {
+      candidates.push('stat_spotlight', 'chart_data', 'hero_headline');
+    } else if (hasContrast) {
+      candidates.push('split_comparison', 'kinetic_typography', 'quote_card');
+    } else if (hasSteps) {
+      candidates.push('threejs_particles', 'hero_headline', 'chart_data');
+    } else if (idx === script.scenes.length - 1) {
+      candidates.push('quote_card', 'kinetic_typography', 'stat_spotlight');
+    }
+
+    // Bổ sung các layout còn lại theo thứ tự xáo trộn từ seed của bài viết
+    for (let k = 0; k < allLayouts.length; k++) {
+      const candidate = allLayouts[(seed + idx * 3 + k) % allLayouts.length];
+      if (!candidates.includes(candidate)) candidates.push(candidate);
+    }
+
+    const chosenLayout = candidates.find((l) => !usedLayouts.has(l)) || candidates[0];
+    usedLayouts.add(chosenLayout);
+
+    // Mỗi cảnh biến thiên nhẹ sắc độ nhấn để chuyển cảnh có cảm giác tươi mới rõ rệt
+    const altPalette = DYNAMIC_STUDIO_PALETTES[(seed + idx) % DYNAMIC_STUDIO_PALETTES.length];
+    const scenePalette = ctx.brandPalette
+      ? basePalette
+      : idx % 2 === 0
+        ? basePalette
+        : {
+            ...basePalette,
+            primary: altPalette.primary,
+            accent: altPalette.accent,
+          };
+
     return {
       id: sc.id,
-      engine: 'hyperframes' as const, // Quy tắc mặc định Mục 2: dùng HyperFrames + GSAP
-      layout,
-      palette,
-      transitions: transitions[idx % transitions.length],
-      useThreeJs: preset.useThreeJsDefault || layout === 'threejs_particles',
+      engine: 'hyperframes' as const,
+      layout: chosenLayout,
+      palette: scenePalette,
+      transitions: transitions[(seed + idx) % transitions.length],
+      useThreeJs: chosenLayout === 'threejs_particles',
       assetsNeeded: [`bg_${sc.id}.svg`, `sfx_${sc.id}.wav`],
-      visualNotes: `Cảnh ${idx + 1} (${sc.durationSec}s): ${sc.onScreenText} — chuyển động ${strategy.pacing}`,
+      visualNotes: `Cảnh ${idx + 1} [${chosenLayout.toUpperCase()}]: ${sc.onScreenText}`,
     };
   });
 
   const output = StoryboardSchema.parse({ scenes: storyboardScenes });
-  ctx.log('info', `Đã hoàn tất Storyboard cho ${output.scenes.length} cảnh (Engine mặc định: HyperFrames + GSAP).`);
+  ctx.log(
+    'info',
+    `Đã đạo diễn Storyboard (${output.scenes.length} cảnh): ${output.scenes.map((s) => `${s.id}=${s.layout}`).join(' -> ')}`
+  );
 
   return {
     output,
@@ -643,6 +807,7 @@ export async function runDirectorAgent(
     costUsd: 0.0008,
   };
 }
+
 
 /**
  * 9. Asset Agent: Tạo/chuẩn bị ảnh minh họa, nhạc nền, SFX kèm thông tin giấy phép (Mục 6 & Mục 12)
@@ -1104,6 +1269,7 @@ export async function runLintPreviewAgent(
         headline: scriptScene.onScreenText,
         subline: scriptScene.segments[0]?.text || '',
         sceneIndex: sIdx,
+        layout: sbScene.layout,
         dataPoints: scriptScene.dataPoints,
         palette: sbScene.palette,
         segments: scriptScene.segments,
@@ -1233,6 +1399,7 @@ export async function runRendererAgent(
             headline: scriptScene.onScreenText,
             subline,
             sceneIndex,
+            layout: sbScene.layout,
             dataPoints: scriptScene.dataPoints,
             palette: sbScene.palette,
             segments: scriptScene.segments,
