@@ -22,13 +22,14 @@ if %errorlevel% neq 0 (
     call npm install -g pnpm
 )
 
-echo [3/4] Cai dat thu vien Monorepo...
-call pnpm install
-
 if not exist .env (
     echo Dang tao file .env tu file mau...
     copy .env.example .env
 )
+
+echo [3/4] Cai dat thu vien Monorepo...
+call pnpm approve-builds --all >nul 2>&1
+call pnpm install --dangerously-allow-all-builds
 
 echo [4/4] Kiem tra moi truong va Voice Studio (192.168.5.18:3900)...
 call npx tsx scripts/doctor.ts
