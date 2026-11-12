@@ -27,11 +27,11 @@ export function generateHyperFramesCompositionHtml(input: BuildHyperFramesSceneI
   const duration = input.scene.durationSec;
   const { primary, secondary, accent, bg, text } = input.storyboard.palette;
 
-  const safeTopPx = isVertical ? 200 : 96;
-  const safeBottomPx = isVertical ? 390 : 110;
-  const safeSidePx = isVertical ? 72 : 120;
-  const captionFontSize = isVertical ? 54 : 42;
-  const headlineFontSize = isVertical ? 74 : 68;
+  const safeTopPx = isVertical ? 210 : 100;
+  const safeBottomPx = isVertical ? 390 : 115;
+  const safeSidePx = isVertical ? 136 : 160;
+  const captionFontSize = isVertical ? 48 : 42;
+  const headlineFontSize = isVertical ? 64 : 60;
 
   const wordsJson = JSON.stringify(
     input.words.map((w) => ({
@@ -329,14 +329,15 @@ function renderSceneSlidePng(opts: {
   const { width, height, aspect, palette } = opts;
   const isVert = aspect === '9:16';
 
-  const padX = isVert ? 68 : 110;
-  const topY = isVert ? 210 : 95;
-  const headlineSize = isVert ? 60 : 56;
-  const bodySize = isVert ? 42 : 36;
-  const captionSize = isVert ? 48 : 42;
+  const padX = isVert ? 136 : 160;
+  const innerPadX = isVert ? 40 : 48;
+  const topY = isVert ? 215 : 100;
+  const headlineSize = isVert ? 52 : 52;
+  const bodySize = isVert ? 38 : 34;
+  const captionSize = isVert ? 44 : 40;
 
-  const headlineLines = wrapTextLines(opts.headline, isVert ? 22 : 38, 3);
-  const sublineLines = wrapTextLines(opts.subline, isVert ? 30 : 52, 7);
+  const headlineLines = wrapTextLines(opts.headline, isVert ? 19 : 34, 3);
+  const sublineLines = wrapTextLines(opts.subline, isVert ? 25 : 46, 8);
 
   const speakerLabel = opts.speaker === 'accent' ? '★ ACCENT (ĐIỂM NHẤN)' : '● LEAD (DẪN CHÍNH)';
   const speakerColor = opts.speaker === 'accent' ? '#F472B6' : '#38BDF8';
@@ -345,19 +346,19 @@ function renderSceneSlidePng(opts: {
   const headlineTspans = headlineLines
     .map(
       (line, idx) =>
-        `<tspan x="${padX + 36}" dy="${idx === 0 ? 0 : headlineSize * 1.28}">${escapeHtml(line)}</tspan>`
+        `<tspan x="${padX + innerPadX}" dy="${idx === 0 ? 0 : headlineSize * 1.28}">${escapeHtml(line)}</tspan>`
     )
     .join('');
 
   const sublineTspans = sublineLines
     .map(
       (line, idx) =>
-        `<tspan x="${padX + 36}" dy="${idx === 0 ? 0 : bodySize * 1.38}">${escapeHtml(line)}</tspan>`
+        `<tspan x="${padX + innerPadX}" dy="${idx === 0 ? 0 : bodySize * 1.38}">${escapeHtml(line)}</tspan>`
     )
     .join('');
 
   const captionWords =
-    opts.captionChunk || opts.subline.trim().split(/\s+/).slice(0, isVert ? 6 : 9).join(' ');
+    opts.captionChunk || opts.subline.trim().split(/\s+/).slice(0, isVert ? 5 : 8).join(' ');
 
   const cardTopY = isVert ? 340 : 210;
   const cardHeight = isVert ? 860 : 520;
@@ -387,8 +388,8 @@ function renderSceneSlidePng(opts: {
     <rect x="${padX}" y="${topY}" width="${progressWidth}" height="12" rx="6" fill="url(#accentGrad)" />
 
     <!-- Speaker Badge -->
-    <rect x="${padX}" y="${topY + 34}" width="380" height="52" rx="26" fill="${speakerColor}" fill-opacity="0.18" stroke="${speakerColor}" stroke-width="2" />
-    <text x="${padX + 26}" y="${topY + 68}" fill="${speakerColor}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="24" font-weight="bold">
+    <rect x="${padX}" y="${topY + 34}" width="360" height="50" rx="25" fill="${speakerColor}" fill-opacity="0.18" stroke="${speakerColor}" stroke-width="2" />
+    <text x="${padX + 24}" y="${topY + 67}" fill="${speakerColor}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="22" font-weight="bold">
       ${escapeHtml(opts.stepBadge || speakerLabel)}
     </text>
 
@@ -397,21 +398,21 @@ function renderSceneSlidePng(opts: {
     <rect x="${padX}" y="${cardTopY}" width="14" height="${cardHeight}" rx="7" fill="url(#accentGrad)" />
 
     <!-- Headline Text -->
-    <text x="${padX + 36}" y="${cardTopY + 95}" fill="${palette.text}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${headlineSize}" font-weight="bold">
+    <text x="${padX + innerPadX}" y="${cardTopY + 90}" fill="${palette.text}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${headlineSize}" font-weight="bold">
       ${headlineTspans}
     </text>
 
     <!-- Divider -->
-    <rect x="${padX + 36}" y="${cardTopY + 95 + headlineLines.length * headlineSize * 1.2}" width="180" height="6" rx="3" fill="${palette.accent}" />
+    <rect x="${padX + innerPadX}" y="${cardTopY + 90 + headlineLines.length * headlineSize * 1.2}" width="160" height="6" rx="3" fill="${palette.accent}" />
 
     <!-- Segment Narration Text -->
-    <text x="${padX + 36}" y="${cardTopY + 155 + headlineLines.length * headlineSize * 1.2}" fill="#E2E8F0" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${bodySize}" font-weight="normal">
+    <text x="${padX + innerPadX}" y="${cardTopY + 150 + headlineLines.length * headlineSize * 1.2}" fill="#E2E8F0" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${bodySize}" font-weight="normal">
       ${sublineTspans}
     </text>
 
     <!-- Bottom Dynamic Caption Bar -->
-    <rect x="${padX}" y="${captionBoxY}" width="${width - padX * 2}" height="145" rx="28" fill="#090D16" fill-opacity="0.92" stroke="${speakerColor}" stroke-width="3" />
-    <text x="${Math.round(width / 2)}" y="${captionBoxY + 88}" text-anchor="middle" fill="${speakerColor}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${captionSize}" font-weight="bold">
+    <rect x="${padX}" y="${captionBoxY}" width="${width - padX * 2}" height="140" rx="28" fill="#090D16" fill-opacity="0.92" stroke="${speakerColor}" stroke-width="3" />
+    <text x="${Math.round(width / 2)}" y="${captionBoxY + 84}" text-anchor="middle" fill="${speakerColor}" font-family="Arial, Segoe UI, DejaVu Sans, sans-serif" font-size="${captionSize}" font-weight="bold">
       ${escapeHtml(captionWords)}
     </text>
   </svg>`;
@@ -472,8 +473,8 @@ export function renderHyperFramesScene(opts: {
         ? opts.segments
         : [{ speaker: 'lead' as const, text: opts.subline || opts.headline }];
 
-    // Chia mỗi segment thành các cụm từ phụ đề (6 từ cho 9:16, 8 từ cho 16:9) để thanh caption bên dưới chạy liên tục
-    const wordsPerChunk = opts.aspect === '9:16' ? 6 : 8;
+    // Chia mỗi segment thành các cụm từ phụ đề (5 từ cho 9:16, 8 từ cho 16:9) để vừa khít lề an toàn mới
+    const wordsPerChunk = opts.aspect === '9:16' ? 5 : 8;
     const slideFrames: Array<{
       speaker: 'lead' | 'accent';
       fullText: string;
