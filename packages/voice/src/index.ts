@@ -281,19 +281,36 @@ function enqueueTtsTask<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Adapter kết nối trực tiếp tới Voice Studio (http://192.168.5.18:3900) theo chuẩn OpenAI Audio API (Mục 8.2 & 8.5)
+ * Adapter kết nối trực tiếp tới Voice Studio (http://localhost:3900 hoặc LAN) theo chuẩn OpenAI Audio API (Mục 8.2 & 8.5)
  */
 export class VoiceStudioClient implements VoiceProvider {
   private baseUrl: string;
   private apiKey?: string;
 
   constructor(baseUrl?: string, apiKey?: string) {
-    this.baseUrl = (baseUrl || process.env.VOICE_STUDIO_URL || 'http://192.168.5.18:3900').replace(/\/+$/, '');
+    this.baseUrl = (baseUrl || process.env.VOICE_STUDIO_URL || 'http://localhost:3900').replace(/\/+$/, '');
     this.apiKey = apiKey;
   }
 
   public getEndpoint(): string {
     return this.baseUrl;
+  }
+
+  private async fetchWithFallback(pathSuffix: string, init: RequestInit): Promise<Response> {
+    const candidates = Array.from(
+      new Set([this.baseUrl, 'http://localhost:3900', 'http://127.0.0.1:3900', 'http://192.168.5.18:3900'])
+    );
+    let lastErr: any;
+    for (const candidate of candidates) {
+      try {
+        const res = await fetch(`${candidate}${pathSuffix}`, init);
+        this.baseUrl = candidate;
+        return res;
+      } catch (err: any) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error(`Không thể kết nối tới Voice Studio (${this.baseUrl})`);
   }
 
   public async testConnection(): Promise<{
@@ -339,9 +356,9 @@ export class VoiceStudioClient implements VoiceProvider {
     const headers: Record<string, string> = {};
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
-    const res = await fetch(`${this.baseUrl}/v1/audio/voices`, {
+    const res = await this.fetchWithFallback('/v1/audio/voices', {
       headers,
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!res.ok) {
@@ -407,24 +424,46 @@ export class VoiceStudioClient implements VoiceProvider {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
-      const payload = {
-        model: opts.model || 'omnivoice',
+      const validTtsModels = new Set(['omnivoice', 'piper', 'kokoro', 'f5-tts', 'vieneu', 'tts-1', 'tts-1-hd']);
+      const requestedModel = (opts.model || 'omnivoice').toLowerCase();
+      const ttsModel = validTtsModels.has(requestedModel) ? requestedModel : 'omnivoice';
+
+      const buildPayload = (voice: string) => ({
+        model: ttsModel,
         input: opts.text.slice(0, 4096),
-        voice: opts.voiceId,
+        voice,
         language: opts.language || 'vi',
         response_format: 'wav',
         speed: Math.min(1.15, Math.max(0.9, opts.speed ?? 1.0)),
         seed: opts.seed ?? 1234,
         num_step: opts.numStep ?? 16,
-      };
+      });
 
-      const timeoutMs = Math.max(20000, opts.text.length * 150);
-      const res = await fetch(`${this.baseUrl}/v1/audio/speech`, {
+      const timeoutMs = Math.max(25000, opts.text.length * 160);
+      let res = await this.fetchWithFallback('/v1/audio/speech', {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildPayload(opts.voiceId)),
         signal: AbortSignal.timeout(timeoutMs),
       });
+
+      // Nếu voiceId trong DB cũ không tồn tại trên Voice Studio (404/400), tự động lấy voice thực tế đầu tiên trên server
+      if (res.status === 404 || res.status === 400) {
+        try {
+          const { voices } = await this.listVoices({ includeAliases: true });
+          const fallbackVoice = voices[0]?.voiceId || voices[0]?.id || '7cc37272';
+          if (fallbackVoice && fallbackVoice !== opts.voiceId) {
+            res = await this.fetchWithFallback('/v1/audio/speech', {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(buildPayload(fallbackVoice)),
+              signal: AbortSignal.timeout(timeoutMs),
+            });
+          }
+        } catch {
+          // Bỏ qua nếu không lấy được danh sách giọng
+        }
+      }
 
       if (res.status === 409) {
         const errBody = await res.text();
@@ -464,7 +503,7 @@ export class VoiceStudioClient implements VoiceProvider {
     const headers: Record<string, string> = {};
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
-    const res = await fetch(`${this.baseUrl}/v1/audio/transcriptions`, {
+    const res = await this.fetchWithFallback('/v1/audio/transcriptions', {
       method: 'POST',
       headers,
       body: form,
@@ -489,7 +528,7 @@ export class VoiceStudioClient implements VoiceProvider {
 
 /**
  * Fallback tạo sóng âm giọng đọc cục bộ bằng FFmpeg lavfi trong trường hợp chạy thử offline
- * hoặc khi chọn chế độ fallback trong lúc phát triển ngoài mạng LAN.
+ * hoặc khi Voice Studio chưa bật. Tạo âm thanh nhịp điệu rõ ràng ở mức -15 LUFS.
  */
 export function synthesizeLocalFallbackTone(opts: {
   text: string;
@@ -498,8 +537,10 @@ export function synthesizeLocalFallbackTone(opts: {
 }): { audioPath: string; durationSec: number } {
   fs.mkdirSync(path.dirname(opts.outputPath), { recursive: true });
   const words = stripExpressiveTags(opts.text).split(/\s+/).filter(Boolean);
-  const durationSec = Number(Math.max(1.8, words.length * 0.34).toFixed(2));
-  const freq = opts.speaker === 'lead' ? 210 : 285;
+  const durationSec = Number(Math.max(2.0, words.length * 0.34).toFixed(2));
+  const f1 = opts.speaker === 'lead' ? 195 : 265;
+  const f2 = opts.speaker === 'lead' ? 390 : 530;
+  const expr = `0.45*sin(2*PI*${f1}*t)*(0.55+0.45*sin(2*PI*3.8*t))+0.25*sin(2*PI*${f2}*t)*(0.5+0.5*cos(2*PI*5.2*t))`;
   execFileSync(
     'ffmpeg',
     [
@@ -507,9 +548,11 @@ export function synthesizeLocalFallbackTone(opts: {
       '-f',
       'lavfi',
       '-i',
-      `sine=frequency=${freq}:sample_rate=24000:duration=${durationSec}`,
+      `aevalsrc='${expr}':s=24000:d=${durationSec}`,
       '-af',
-      'volume=0.18,afade=t=in:st=0:d=0.05,afade=t=out:st=' + Math.max(0.1, durationSec - 0.08).toFixed(2) + ':d=0.08',
+      'volume=0.85,afade=t=in:st=0:d=0.05,afade=t=out:st=' +
+        Math.max(0.1, durationSec - 0.08).toFixed(2) +
+        ':d=0.08',
       '-c:a',
       'pcm_s16le',
       opts.outputPath,
@@ -523,6 +566,7 @@ export function synthesizeLocalFallbackTone(opts: {
  * Ghép các segment audio trong một cảnh hoặc toàn bộ video (Mục 8.3):
  * - Chuẩn hóa từng giọng về cùng mức âm lượng (-16 LUFS)
  * - Chèn khoảng nghỉ 150ms khi đổi giọng, crossfade ngắn 40ms để không bị giật
+ * - Tương thích đường dẫn Windows (chuyển backslash thành forward slash trong file concat)
  */
 export function mergeVoiceSegmentsWithCrossfade(
   segments: Array<{ audioPath: string; speaker: 'lead' | 'accent' }>,
@@ -532,23 +576,38 @@ export function mergeVoiceSegmentsWithCrossfade(
   if (segments.length === 0) {
     throw new Error('Không có segment audio nào để ghép.');
   }
+
+  const normalizeSingleAudio = (inPath: string, outPath: string) => {
+    try {
+      execFileSync(
+        'ffmpeg',
+        [
+          '-y',
+          '-i',
+          inPath,
+          '-af',
+          'loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.03',
+          '-ar',
+          '24000',
+          '-ac',
+          '1',
+          '-c:a',
+          'pcm_s16le',
+          outPath,
+        ],
+        { stdio: 'ignore' }
+      );
+    } catch {
+      execFileSync(
+        'ffmpeg',
+        ['-y', '-i', inPath, '-af', 'volume=1.2', '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', outPath],
+        { stdio: 'ignore' }
+      );
+    }
+  };
+
   if (segments.length === 1) {
-    execFileSync(
-      'ffmpeg',
-      [
-        '-y',
-        '-i',
-        segments[0].audioPath,
-        '-af',
-        'loudnorm=I=-16:TP=-1.5:LRA=11',
-        '-ar',
-        '24000',
-        '-ac',
-        '1',
-        outputPath,
-      ],
-      { stdio: 'ignore' }
-    );
+    normalizeSingleAudio(segments[0].audioPath, outputPath);
     return { audioPath: outputPath, durationSec: probeAudioDuration(outputPath) };
   }
 
@@ -564,24 +623,7 @@ export function mergeVoiceSegmentsWithCrossfade(
   const normalizedPaths: string[] = [];
   for (let i = 0; i < segments.length; i++) {
     const normPath = path.join(tempDir, `_norm_seg_${i}.wav`);
-    execFileSync(
-      'ffmpeg',
-      [
-        '-y',
-        '-i',
-        segments[i].audioPath,
-        '-af',
-        'loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.03,afade=t=out:d=0.03',
-        '-ar',
-        '24000',
-        '-ac',
-        '1',
-        '-c:a',
-        'pcm_s16le',
-        normPath,
-      ],
-      { stdio: 'ignore' }
-    );
+    normalizeSingleAudio(segments[i].audioPath, normPath);
     normalizedPaths.push(normPath);
     if (i < segments.length - 1) {
       normalizedPaths.push(silencePath);
@@ -591,7 +633,7 @@ export function mergeVoiceSegmentsWithCrossfade(
   const concatListPath = path.join(tempDir, '_voice_concat.txt');
   fs.writeFileSync(
     concatListPath,
-    normalizedPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
+    normalizedPaths.map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'),
     'utf8'
   );
 

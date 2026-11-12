@@ -323,7 +323,7 @@ function seedDefaultData() {
   const sysCount = (db.prepare('SELECT COUNT(*) as c FROM system_settings').get() as any).c;
   if (sysCount === 0) {
     const defaultSettings = {
-      voiceStudioUrl: process.env.VOICE_STUDIO_URL || 'http://192.168.5.18:3900',
+      voiceStudioUrl: process.env.VOICE_STUDIO_URL || 'http://localhost:3900',
       showOpenAiVoiceAliases: false,
       castSelectionMode: 'auto_rotate',
       defaultCastMode: 'lead_accent',
@@ -355,7 +355,14 @@ function seedDefaultData() {
 
 export function getGlobalSettings(): Record<string, any> {
   const row = db.prepare('SELECT valueJson FROM system_settings WHERE key = ?').get('global') as any;
-  return row ? JSON.parse(row.valueJson) : {};
+  const parsed = row ? JSON.parse(row.valueJson) : {};
+  if (
+    process.env.VOICE_STUDIO_URL &&
+    (!parsed.voiceStudioUrl || parsed.voiceStudioUrl === 'http://192.168.5.18:3900')
+  ) {
+    parsed.voiceStudioUrl = process.env.VOICE_STUDIO_URL.replace(/\/+$/, '');
+  }
+  return parsed;
 }
 
 export function updateGlobalSettings(patch: Record<string, any>): Record<string, any> {

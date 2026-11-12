@@ -45,8 +45,10 @@ export function normalizeSceneClip(opts: {
  */
 export function concatNormalizedClips(clipPaths: string[], outputPath: string): string {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  const listPath = path.join(path.dirname(outputPath), `_concat_${ path.basename(outputPath, '.mp4') }.txt`);
-  const content = clipPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+  const listPath = path.join(path.dirname(outputPath), `_concat_${path.basename(outputPath, '.mp4')}.txt`);
+  const content = clipPaths
+    .map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`)
+    .join('\n');
   fs.writeFileSync(listPath, content, 'utf8');
 
   execFileSync(
@@ -64,7 +66,7 @@ export function concatNormalizedClips(clipPaths: string[], outputPath: string): 
 export function ensureBackgroundMusicFile(musicPath: string, durationSec: number): string {
   if (fs.existsSync(musicPath)) return musicPath;
   fs.mkdirSync(path.dirname(musicPath), { recursive: true });
-  const dur = Math.max(5, Math.ceil(durationSec + 2));
+  const dur = Math.max(8, Math.ceil(durationSec + 5));
   execFileSync(
     'ffmpeg',
     [
@@ -78,7 +80,7 @@ export function ensureBackgroundMusicFile(musicPath: string, durationSec: number
       '-i',
       `sine=frequency=165:sample_rate=44100:duration=${dur}`,
       '-filter_complex',
-      '[0:a][1:a]amix=inputs=2:duration=first,volume=0.08,lowpass=f=400[a]',
+      '[0:a][1:a]amix=inputs=2:duration=first,volume=0.06,lowpass=f=400[a]',
       '-map',
       '[a]',
       '-c:a',
@@ -94,9 +96,7 @@ export function ensureBackgroundMusicFile(musicPath: string, durationSec: number
 
 /**
  * Trộn giọng đọc + nhạc nền, ducking nhạc khi có giọng (Mục 7.5):
- * ffmpeg -i video.mp4 -i voice.wav -i music.mp3
- *   -filter_complex "[2:a]volume=0.25[m];[m][1:a]sidechaincompress=threshold=0.05:ratio=8[mduck];[1:a][mduck]amix=inputs=2:duration=first[a]"
- *   -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -movflags +faststart final.mp4
+ * Chuẩn hóa cả 2 luồng audio về stereo 44100Hz để sidechaincompress và amix luôn tạo ra tiếng rõ ràng 100% trên mọi trình phát.
  */
 export function mixVoiceAndMusicWithDucking(opts: {
   videoPath: string;
@@ -117,7 +117,7 @@ export function mixVoiceAndMusicWithDucking(opts: {
         '-i',
         opts.musicPath,
         '-filter_complex',
-        '[2:a]volume=0.25[m];[m][1:a]sidechaincompress=threshold=0.05:ratio=8[mduck];[1:a][mduck]amix=inputs=2:duration=first[a]',
+        '[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.6[v];[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.22[m];[m][v]sidechaincompress=threshold=0.05:ratio=8[mduck];[v][mduck]amix=inputs=2:duration=first:dropout_transition=2[a]',
         '-map',
         '0:v',
         '-map',
@@ -130,13 +130,11 @@ export function mixVoiceAndMusicWithDucking(opts: {
         '192k',
         '-movflags',
         '+faststart',
-        '-shortest',
         opts.outputPath,
       ],
       { stdio: 'ignore' }
     );
   } catch {
-    // Dự phòng nếu filter sidechaincompress không tương thích kênh mono/stereo
     execFileSync(
       'ffmpeg',
       [
@@ -148,7 +146,7 @@ export function mixVoiceAndMusicWithDucking(opts: {
         '-i',
         opts.musicPath,
         '-filter_complex',
-        '[2:a]volume=0.15[m];[1:a][m]amix=inputs=2:duration=first[a]',
+        '[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.6[v];[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.14[m];[v][m]amix=inputs=2:duration=first[a]',
         '-map',
         '0:v',
         '-map',
@@ -161,7 +159,6 @@ export function mixVoiceAndMusicWithDucking(opts: {
         '192k',
         '-movflags',
         '+faststart',
-        '-shortest',
         opts.outputPath,
       ],
       { stdio: 'ignore' }

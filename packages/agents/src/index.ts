@@ -212,6 +212,7 @@ export async function runCleanerAgent(
     userPrompt: `Hãy làm sạch bài viết có tiêu đề "${rawArticle.title}".`,
     untrustedContent: rawArticle.text,
     schema: CleanArticleSchema,
+    onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => {
       const sentences = splitSentences(rawArticle.text);
       const keyFacts =
@@ -259,6 +260,7 @@ export async function runAnalyzerAgent(
     userPrompt: `Tiêu đề: ${cleanArticle.title}\nCác dữ kiện chính:\n- ${cleanArticle.keyFacts.join('\n- ')}`,
     untrustedContent: cleanArticle.body,
     schema: AnalysisSchema,
+    onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => ({
       topic: cleanArticle.title,
       audience: 'Người xem quan tâm tin tức công nghệ, kiến thức thực tiễn và xu hướng mới',
@@ -301,6 +303,7 @@ export async function runScorerAgent(
       'Bạn là Scorer Agent. Chấm điểm tiềm năng chuyển thể thành video ngắn theo thang 0-10 cho từng tiêu chí: hook, novelty, clarity, controversy, visualizability. Trả về JSON đúng schema Score.',
     userPrompt: `Chủ đề: ${analysis.topic}\nGóc hook: ${analysis.hookAngles.join(' | ')}\nDữ kiện: ${cleanArticle.keyFacts.join('; ')}`,
     schema: ScoreSchema,
+    onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => {
       const hook = 8.4;
       const novelty = 7.8;
@@ -377,6 +380,7 @@ export async function runStrategistAgent(
       'Bạn là Strategist Agent. Dựa trên Analysis và Score, hãy chọn format, durationSec (15-90s), style, pacing, aspect, castMode. Trả về JSON đúng schema Strategy.',
     userPrompt: `Chủ đề: ${analysis.topic}\nTone: ${analysis.tone}\nĐiểm: ${score.total}\nAspect yêu cầu: ${ctx.aspect}\nStyle preset: ${ctx.stylePreset}`,
     schema: StrategySchema,
+    onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => ({
       format: 'news_brief',
       durationSec: 24,
@@ -435,6 +439,7 @@ Trả về JSON đúng schema Script. Không thêm văn bản ngoài JSON.`;
     userPrompt: `Tiêu đề: ${cleanArticle.title}\nCác dữ kiện chính:\n${cleanArticle.keyFacts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`,
     untrustedContent: cleanArticle.body,
     schema: ScriptSchema,
+    onLog: (lvl, msg) => ctx.log(lvl, msg),
     fallbackGenerator: () => {
       const f0 = cleanArticle.keyFacts[0] || cleanArticle.title;
       const f1 = cleanArticle.keyFacts[1] || 'Phân tích chuyên sâu từ dữ liệu gốc của bài viết.';
@@ -726,16 +731,19 @@ export async function runVoiceStudioAgent(
   try {
     const { voices } = await voiceClient.listVoices({ includeAliases: false });
     if (voices.length > 0) {
-      for (const v of voices) {
-        if (!activePool.some((p) => p.id === v.id || p.voiceId === v.voiceId)) {
-          activePool.push({
-            ...v,
-            enabled: true,
-            weight: 1,
-            tags: ['tin tức'],
-          });
-        }
-      }
+      // Chỉ giữ các giọng thực tế đang tồn tại trên Voice Studio (kế thừa cấu hình weight/tags/genderOverride từ DB)
+      activePool = voices.map((v) => {
+        const saved = ctx.voicePool.find((p) => p.id === v.id || p.voiceId === v.voiceId || p.name === v.name);
+        return {
+          ...v,
+          enabled: saved ? saved.enabled : true,
+          weight: saved ? saved.weight : 1,
+          tags: saved?.tags?.length ? saved.tags : ['tin tức'],
+          genderOverride: saved?.genderOverride,
+          gender: saved?.genderOverride || v.gender,
+          consentNote: saved?.consentNote,
+        };
+      });
     }
   } catch (err: any) {
     ctx.log(
@@ -1095,6 +1103,7 @@ export async function runLintPreviewAgent(
         headline: scriptScene.onScreenText,
         subline: scriptScene.segments[0]?.text || '',
         palette: sbScene.palette,
+        segments: scriptScene.segments,
       });
 
       const assetId = ctx.onAssetCreated?.({
@@ -1219,6 +1228,7 @@ export async function runRendererAgent(
             headline: scriptScene.onScreenText,
             subline,
             palette: sbScene.palette,
+            segments: scriptScene.segments,
           });
         }
 
