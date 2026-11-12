@@ -3,6 +3,6 @@ packages:
   - "packages/*"
   - "packages/engines/*"
 
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
+allowBuilds:
+  esbuild: true
+  sharp: true

@@ -298,6 +298,29 @@ function escapeFfmpegDrawtext(text: string): string {
     .replace(/\n/g, ' ');
 }
 
+function findSystemFontFile(): string | null {
+  const isWindows = process.platform === 'win32';
+  const candidates = isWindows
+    ? [
+        'C:/Windows/Fonts/arial.ttf',
+        'C:/Windows/Fonts/segoeui.ttf',
+        'C:/Windows/Fonts/tahoma.ttf',
+        'C:/Windows/Fonts/calibri.ttf',
+      ]
+    : [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        '/System/Library/Fonts/Helvetica.ttc',
+      ];
+
+  for (const font of candidates) {
+    if (fs.existsSync(font)) {
+      return font.replace(/:/g, '\\:').replace(/\\/g, '/');
+    }
+  }
+  return null;
+}
+
 /**
  * Render composition HyperFrames ra MP4 và tạo ảnh Snapshot (Mục 7.1 & Bước 13/14)
  * - Gọi trực tiếp `npx hyperframes render` trong thư mục cảnh
@@ -345,45 +368,88 @@ export function renderHyperFramesScene(opts: {
     const accHex = opts.palette.accent.replace('#', '0x');
     const txtHex = opts.palette.text.replace('#', '0x');
 
-    const safeHeadline = escapeFfmpegDrawtext(opts.headline.slice(0, 48));
-    const safeSubline = escapeFfmpegDrawtext(opts.subline.slice(0, 68));
     const topBarY = opts.aspect === '9:16' ? 210 : 110;
     const headlineY = opts.aspect === '9:16' ? 560 : 380;
     const captionY = opts.aspect === '9:16' ? 1320 : 790;
     const headlineSize = opts.aspect === '9:16' ? 62 : 58;
     const captionSize = opts.aspect === '9:16' ? 50 : 40;
 
-    const vf = [
+    const fontPath = findSystemFontFile();
+    const fontParam = fontPath ? `:fontfile='${fontPath}'` : '';
+
+    // Ghi nội dung vào file tạm UTF-8 để tránh lỗi mã hóa ký tự tiếng Việt và ký tự đặc biệt trên Windows CMD
+    const headlineTxtPath = path.join(opts.sceneDir, `_txt_h_${opts.aspect.replace(':', 'x')}.txt`);
+    const sublineTxtPath = path.join(opts.sceneDir, `_txt_s_${opts.aspect.replace(':', 'x')}.txt`);
+    fs.writeFileSync(headlineTxtPath, opts.headline.slice(0, 48), 'utf8');
+    fs.writeFileSync(sublineTxtPath, opts.subline.slice(0, 68), 'utf8');
+
+    const headlineFileEscaped = headlineTxtPath.replace(/:/g, '\\:').replace(/\\/g, '/');
+    const sublineFileEscaped = sublineTxtPath.replace(/:/g, '\\:').replace(/\\/g, '/');
+
+    const vfWithDrawtext = [
       `drawbox=x=0:y=0:w=${width}:h=${height}:color=${bgHex}:t=fill`,
       `drawbox=x=60:y=${topBarY}:w=${width - 120}:h=14:color=${priHex}:t=fill`,
       `drawbox=x=60:y=${captionY - 35}:w=${width - 120}:h=130:color=0x0F172ACC:t=fill`,
       `drawbox=x=60:y=${captionY - 35}:w=14:h=130:color=${accHex}:t=fill`,
-      `drawtext=text='${safeHeadline}':fontcolor=${txtHex}:fontsize=${headlineSize}:x=(w-text_w)/2:y=${headlineY}`,
-      `drawtext=text='${safeSubline}':fontcolor=${accHex}:fontsize=${captionSize}:x=(w-text_w)/2:y=${captionY}`,
+      `drawtext=textfile='${headlineFileEscaped}'${fontParam}:fontcolor=${txtHex}:fontsize=${headlineSize}:x=(w-text_w)/2:y=${headlineY}`,
+      `drawtext=textfile='${sublineFileEscaped}'${fontParam}:fontcolor=${accHex}:fontsize=${captionSize}:x=(w-text_w)/2:y=${captionY}`,
     ].join(',');
 
-    execFileSync(
-      'ffmpeg',
-      [
-        '-y',
-        '-f',
-        'lavfi',
-        '-i',
-        `color=c=${opts.palette.bg}:s=${width}x${height}:r=30:d=${opts.durationSec}`,
-        '-vf',
-        vf,
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-crf',
-        '20',
-        '-pix_fmt',
-        'yuv420p',
-        opts.outputMp4Path,
-      ],
-      { stdio: 'ignore' }
-    );
+    try {
+      execFileSync(
+        'ffmpeg',
+        [
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          `color=c=${bgHex}:s=${width}x${height}:r=30:d=${opts.durationSec}`,
+          '-vf',
+          vfWithDrawtext,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-crf',
+          '20',
+          '-pix_fmt',
+          'yuv420p',
+          opts.outputMp4Path,
+        ],
+        { stdio: 'ignore' }
+      );
+    } catch {
+      // Fallback an toàn: nếu máy Windows thiếu fontconfig hoặc lỗi drawtext, vẫn render clip với hình nền và box chuẩn bảng màu
+      const vfFallback = [
+        `drawbox=x=0:y=0:w=${width}:h=${height}:color=${bgHex}:t=fill`,
+        `drawbox=x=60:y=${topBarY}:w=${width - 120}:h=14:color=${priHex}:t=fill`,
+        `drawbox=x=60:y=${captionY - 35}:w=${width - 120}:h=130:color=0x0F172ACC:t=fill`,
+        `drawbox=x=60:y=${captionY - 35}:w=14:h=130:color=${accHex}:t=fill`,
+      ].join(',');
+
+      execFileSync(
+        'ffmpeg',
+        [
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          `color=c=${bgHex}:s=${width}x${height}:r=30:d=${opts.durationSec}`,
+          '-vf',
+          vfFallback,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-crf',
+          '20',
+          '-pix_fmt',
+          'yuv420p',
+          opts.outputMp4Path,
+        ],
+        { stdio: 'ignore' }
+      );
+    }
   }
 
   if (opts.snapshotPath) {
