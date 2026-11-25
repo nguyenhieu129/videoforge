@@ -254,6 +254,72 @@ export function pickCast(
 }
 
 /**
+ * Chọn ngẫu nhiên DUY NHẤT 1 giọng đọc từ danh sách đang bật (không trộn giọng nam/nữ)
+ */
+export function pickRandomSingleVoice(
+  pool: PoolVoice[],
+  history: VoiceUsage[],
+  opts: CastOpts,
+  seed: number
+): SelectedCast {
+  const rng = seededRng(seed);
+  const validPool = pool.filter((v) => v.enabled && v.type !== 'openai_alias');
+
+  if (validPool.length === 0) {
+    const fallbackVoice: PoolVoice = {
+      id: '7cc37272',
+      voiceId: '7cc37272',
+      name: 'giong_1_nam',
+      type: 'profile',
+      gender: 'nam',
+      cloned: true,
+      language: 'vi',
+      addressableByName: true,
+      enabled: true,
+      weight: 1,
+      tags: ['tin tức'],
+    };
+    return {
+      lead: fallbackVoice,
+      accent: fallbackVoice,
+      singleVoiceFallback: true,
+      reason: `Giọng mặc định (${fallbackVoice.name}) do danh sách giọng đang trống`,
+    };
+  }
+
+  if ((opts.mode === 'fixed_pair' || opts.mode === 'lock_one') && opts.locks.leadVoiceId) {
+    const locked = validPool.find(
+      (v) => v.id === opts.locks.leadVoiceId || v.voiceId === opts.locks.leadVoiceId
+    );
+    if (locked) {
+      return {
+        lead: locked,
+        accent: locked,
+        singleVoiceFallback: false,
+        reason: `Dùng cố định 1 giọng đã chọn: ${locked.name}`,
+      };
+    }
+  }
+
+  const recent = recentVoiceIds(history, Math.min(opts.avoidLastN, Math.max(0, validPool.length - 1)));
+  const fresh = validPool.filter((v) => !recent.has(v.id) && !recent.has(v.voiceId));
+  const candidates = fresh.length > 0 ? fresh : validPool;
+
+  const chosen = weightedPick(
+    candidates,
+    (v) => Math.max(0.1, v.weight || 1) * rarityBoost(v, history),
+    rng
+  );
+
+  return {
+    lead: chosen,
+    accent: chosen,
+    singleVoiceFallback: false,
+    reason: `Chọn ngẫu nhiên 1 giọng đọc (${chosen.name}) từ ${validPool.length} giọng đang bật — không trộn giọng nam/nữ`,
+  };
+}
+
+/**
  * Đo thời lượng file audio bằng ffprobe
  */
 export function probeAudioDuration(audioPath: string): number {

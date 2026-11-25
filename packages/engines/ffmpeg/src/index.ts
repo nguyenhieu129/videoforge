@@ -176,6 +176,205 @@ export function ensureStudioSfxPack(sfxDir: string): Record<Exclude<SfxType, 'no
   return outMap;
 }
 
+export interface FreeMusicTrack {
+  id: string;
+  title: string;
+  mood: MusicMood;
+  bpm: number;
+  description: string;
+  license: string;
+}
+
+export const FREE_MUSIC_TRACKS: FreeMusicTrack[] = [
+  {
+    id: 'lofi_chill',
+    title: 'Lo-Fi Chill Warmth',
+    mood: 'cinematic_story',
+    bpm: 84,
+    description: 'Hợp âm ấm áp, nhẹ nhàng — hợp chia sẻ kiến thức AI & kể chuyện',
+    license: 'CC0 1.0 Free Studio Audio',
+  },
+  {
+    id: 'tech_pulse',
+    title: 'Cyber Tech Pulse',
+    mood: 'cyber_tech',
+    bpm: 116,
+    description: 'Nhịp điện tử công nghệ mượt mà — hợp tin AI, chip bán dẫn & phần mềm',
+    license: 'CC0 1.0 Free Studio Audio',
+  },
+  {
+    id: 'corporate_inspire',
+    title: 'Inspiring Future',
+    mood: 'finance_pulse',
+    bpm: 108,
+    description: 'Tươi sáng, chuyên nghiệp — hợp phân tích xu hướng & sản phẩm mới',
+    license: 'CC0 1.0 Free Studio Audio',
+  },
+  {
+    id: 'news_tension',
+    title: 'Breaking Newsroom',
+    mood: 'breaking_urgent',
+    bpm: 126,
+    description: 'Nhịp nhanh, kịch tính — hợp tin nóng công nghệ & biến động thị trường',
+    license: 'CC0 1.0 Free Studio Audio',
+  },
+  {
+    id: 'cinematic_epic',
+    title: 'Cinematic Horizon',
+    mood: 'cinematic_story',
+    bpm: 92,
+    description: 'Không gian rộng sâu lắng — hợp phóng sự & góc nhìn tương lai',
+    license: 'CC0 1.0 Free Studio Audio',
+  },
+  {
+    id: 'minimal_ambient',
+    title: 'Minimal Focus Pad',
+    mood: 'minimal_focus',
+    bpm: 96,
+    description: 'Nền âm tối giản cực nhẹ — tôn tuyệt đối giọng đọc thuyết minh',
+    license: 'CC0 1.0 Free Studio Audio',
+  },
+];
+
+/**
+ * Tổng hợp bản nhạc nền miễn phí có vòng hòa âm + giai điệu nhẹ dễ nghe bằng FFmpeg aevalsrc
+ */
+export function ensureFreeMusicTrackFile(
+  trackId: string,
+  musicPath: string,
+  durationSec: number
+): { path: string; track: FreeMusicTrack } {
+  const track = FREE_MUSIC_TRACKS.find((t) => t.id === trackId) || FREE_MUSIC_TRACKS[1]!;
+  if (fs.existsSync(musicPath)) return { path: musicPath, track };
+
+  fs.mkdirSync(path.dirname(musicPath), { recursive: true });
+  const dur = Math.max(8, Math.ceil(durationSec + 2));
+
+  const exprByTrack: Record<string, { expr: string; lowpass: number; vol: number }> = {
+    lofi_chill: {
+      expr:
+        '0.22*sin(2*PI*(if(lt(mod(t,8),2),130.8,if(lt(mod(t,8),4),110,if(lt(mod(t,8),6),87.3,98))))*t)' +
+        '+0.14*sin(2*PI*(if(lt(mod(t,8),2),196,if(lt(mod(t,8),4),164.8,if(lt(mod(t,8),6),130.8,146.8))))*t)' +
+        '+0.10*sin(2*PI*(if(lt(mod(t,8),2),246.9,if(lt(mod(t,8),4),220,if(lt(mod(t,8),6),174.6,196))))*t)' +
+        '+0.08*sin(2*PI*(if(lt(mod(t,2),0.5),329.6,if(lt(mod(t,2),1),392,if(lt(mod(t,2),1.5),440,392))))*t)*exp(-4*mod(t,0.5))',
+      lowpass: 900,
+      vol: 0.22,
+    },
+    tech_pulse: {
+      expr:
+        '0.20*sin(2*PI*(if(lt(mod(t,8),2),110,if(lt(mod(t,8),4),87.3,if(lt(mod(t,8),6),130.8,98))))*t)' +
+        '+0.13*sin(2*PI*(if(lt(mod(t,8),2),220,if(lt(mod(t,8),4),174.6,if(lt(mod(t,8),6),261.6,196))))*t)' +
+        '+0.11*sin(2*PI*(if(lt(mod(t,1),0.25),329.6,if(lt(mod(t,1),0.5),440,if(lt(mod(t,1),0.75),523.3,440))))*t)*exp(-5*mod(t,0.25))',
+      lowpass: 1400,
+      vol: 0.2,
+    },
+    corporate_inspire: {
+      expr:
+        '0.20*sin(2*PI*(if(lt(mod(t,8),2),130.8,if(lt(mod(t,8),4),146.8,if(lt(mod(t,8),6),164.8,196))))*t)' +
+        '+0.14*sin(2*PI*(if(lt(mod(t,8),2),261.6,if(lt(mod(t,8),4),293.7,if(lt(mod(t,8),6),329.6,392))))*t)' +
+        '+0.10*sin(2*PI*(if(lt(mod(t,1.5),0.5),392,if(lt(mod(t,1.5),1),493.9,587.3)))*t)*exp(-4.5*mod(t,0.5))',
+      lowpass: 1500,
+      vol: 0.2,
+    },
+    news_tension: {
+      expr:
+        '0.22*sin(2*PI*(if(lt(mod(t,4),2),110,123.5))*t)*(0.6+0.4*sin(2*PI*4*t))' +
+        '+0.14*sin(2*PI*220*t)*exp(-6*mod(t,0.25))' +
+        '+0.09*sin(2*PI*(if(lt(mod(t,1),0.5),329.6,349.2))*t)*exp(-5*mod(t,0.5))',
+      lowpass: 1300,
+      vol: 0.19,
+    },
+    cinematic_epic: {
+      expr:
+        '0.24*sin(2*PI*(if(lt(mod(t,8),4),98,87.3))*t)' +
+        '+0.16*sin(2*PI*(if(lt(mod(t,8),4),146.8,130.8))*t)' +
+        '+0.12*sin(2*PI*(if(lt(mod(t,8),4),220,196))*t)*(0.7+0.3*sin(2*PI*0.5*t))',
+      lowpass: 820,
+      vol: 0.22,
+    },
+    minimal_ambient: {
+      expr:
+        '0.20*sin(2*PI*130.8*t)+0.14*sin(2*PI*196*t)*(0.75+0.25*sin(2*PI*0.35*t))' +
+        '+0.09*sin(2*PI*293.7*t)*exp(-2.5*mod(t,2))',
+      lowpass: 720,
+      vol: 0.18,
+    },
+  };
+
+  const cfg = exprByTrack[track.id] || exprByTrack.tech_pulse!;
+  const stereoExpr = `${cfg.expr}|${cfg.expr}`;
+
+  try {
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        `aevalsrc=${stereoExpr}:d=${dur}:s=44100`,
+        '-af',
+        `lowpass=f=${cfg.lowpass},volume=${cfg.vol},afade=t=in:st=0:d=0.6,afade=t=out:st=${Math.max(1, dur - 1.2)}:d=1.2`,
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '160k',
+        musicPath,
+      ],
+      { stdio: 'ignore' }
+    );
+  } catch {
+    ensureBackgroundMusicFile(musicPath, durationSec, track.mood);
+  }
+
+  return { path: musicPath, track };
+}
+
+/**
+ * Ghép các scene_i_muxed.mp4 KHÔNG kèm nhạc nền (khi người dùng tắt nhạc nền)
+ */
+export function assembleMuxedScenesOnly(opts: {
+  muxedClipPaths: string[];
+  outputPath: string;
+}): string {
+  fs.mkdirSync(path.dirname(opts.outputPath), { recursive: true });
+  const dir = path.dirname(opts.outputPath);
+  const base = path.basename(opts.outputPath, '.mp4');
+  const listPath = path.join(dir, `_muxonly_${base}.txt`);
+
+  const listContent = opts.muxedClipPaths
+    .map((p) => `file '${toPosixPath(p).replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  fs.writeFileSync(listPath, listContent, 'utf8');
+
+  execFileSync(
+    'ffmpeg',
+    [
+      '-y',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listPath,
+      '-af',
+      'loudnorm=I=-14:TP=-1.5:LRA=11',
+      '-c:v',
+      'copy',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-movflags',
+      '+faststart',
+      opts.outputPath,
+    ],
+    { stdio: 'ignore' }
+  );
+
+  return opts.outputPath;
+}
+
 /**
  * Tạo nhạc nền theo 5 phong cách (musicMood) khác nhau bằng FFmpeg lavfi
  */

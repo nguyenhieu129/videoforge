@@ -14,8 +14,10 @@ import {
   detectGenderFromName,
   stripExpressiveTags,
   pickCast,
+  pickRandomSingleVoice,
   type PoolVoice,
 } from '../packages/voice/src/index.js';
+import { FREE_MUSIC_TRACKS } from '../packages/engines/ffmpeg/src/index.js';
 import {
   buildDefaultTimedCues,
   generateHyperFramesCompositionHtml,
@@ -223,5 +225,39 @@ describe('VideoForge Unit & Golden Tests (Section 16)', () => {
       aspect: '9:16',
     });
     expect(check.valid).toBe(true);
+  });
+
+  it('picks a single random voice without mixing male and female and exposes free music tracks', () => {
+    const pool: PoolVoice[] = [
+      {
+        id: '7cc37272',
+        voiceId: '7cc37272',
+        name: 'giong_1_nam',
+        type: 'profile',
+        gender: 'nam',
+        cloned: true,
+        language: 'Auto',
+        addressableByName: true,
+        enabled: true,
+        weight: 1,
+        tags: ['tin tức'],
+      },
+      {
+        id: 'giong_2_nu',
+        voiceId: 'giong_2_nu',
+        name: 'giong_2_nu',
+        type: 'profile',
+        gender: 'nu',
+        cloned: true,
+        language: 'Auto',
+        addressableByName: true,
+        enabled: true,
+        weight: 1,
+        tags: ['tin tức'],
+      },
+    ];
+    const single = pickRandomSingleVoice(pool, [], { mode: 'auto_rotate', avoidLastN: 1, locks: {} }, 2026);
+    expect(single.lead.id).toBe(single.accent.id);
+    expect(FREE_MUSIC_TRACKS.length).toBeGreaterThanOrEqual(5);
   });
 });

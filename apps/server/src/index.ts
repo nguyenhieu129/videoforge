@@ -12,10 +12,11 @@ import { testProviderConnection } from '@videoforge/providers';
 import { MODEL_PRESETS, STYLE_PRESETS, DEFAULT_CAST_PRESETS } from '@videoforge/templates';
 import {
   VoiceStudioClient,
-  pickCast,
+  pickRandomSingleVoice,
   synthesizeLocalFallbackTone,
   mergeVoiceSegmentsWithCrossfade,
 } from '@videoforge/voice';
+import { FREE_MUSIC_TRACKS, ensureFreeMusicTrackFile } from '@videoforge/engine-ffmpeg';
 import { executePublishJob, PLATFORM_LIMITS, type PublishPlatform } from '@videoforge/publishers';
 import {
   db,
@@ -178,6 +179,29 @@ app.get('/api/projects/:id', async (req, reply) => {
     runs: runs.map((r) => ({ ...r, voiceCast: JSON.parse(r.voiceCastJson || '{}') })),
     assets: assets.map((a) => ({ ...a, meta: JSON.parse(a.metaJson || '{}') })),
   };
+});
+
+app.delete('/api/projects/:id', async (req) => {
+  const { id } = req.params as { id: string };
+  const runs = db.prepare('SELECT id FROM runs WHERE projectId = ?').all(id) as Array<{ id: string }>;
+  for (const r of runs) {
+    cancelPipelineRun(r.id);
+    db.prepare('DELETE FROM log_entries WHERE runId = ?').run(r.id);
+    db.prepare('DELETE FROM run_events WHERE runId = ?').run(r.id);
+    db.prepare('DELETE FROM step_runs WHERE runId = ?').run(r.id);
+  }
+  db.prepare('DELETE FROM publish_jobs WHERE projectId = ?').run(id);
+  db.prepare('DELETE FROM assets WHERE projectId = ?').run(id);
+  db.prepare('DELETE FROM voice_usages WHERE projectId = ?').run(id);
+  db.prepare('DELETE FROM runs WHERE projectId = ?').run(id);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+
+  const projDir = path.join(getDataDir(), 'projects', id);
+  if (fs.existsSync(projDir)) {
+    fs.rmSync(projDir, { recursive: true, force: true });
+  }
+
+  return { ok: true, deletedId: id };
 });
 
 app.post('/api/projects/:id/runs', async (req) => {
@@ -829,7 +853,7 @@ app.get('/api/voices', async (req) => {
   }));
 
   // Mô phỏng cặp giọng sẽ chọn cho lần chạy kế tiếp
-  const previewNextCast = pickCast(
+  const previewNextCast = pickRandomSingleVoice(
     pool,
     history,
     {
@@ -915,6 +939,230 @@ app.put('/api/voices/:voiceId', async (req) => {
   }
 
   return { voices: getVoicePoolFromDb() };
+});
+
+app.delete('/api/voices/:voiceId', async (req) => {
+  const { voiceId } = req.params as { voiceId: string };
+  db.prepare('DELETE FROM voice_settings WHERE voiceId = ?').run(voiceId);
+  db.prepare('DELETE FROM voice_usages WHERE voiceId = ?').run(voiceId);
+  return { ok: true, voices: getVoicePoolFromDb() };
+});
+
+// ============================================================================
+// FREE MUSIC LIBRARY & PREVIEW
+// ============================================================================
+app.get('/api/music/tracks', async () => {
+  const settings = getGlobalSettings();
+  return {
+    tracks: FREE_MUSIC_TRACKS,
+    enableBackgroundMusic: settings.enableBackgroundMusic !== false,
+    selectedMusicTrackId: settings.selectedMusicTrackId || 'auto',
+  };
+});
+
+app.post('/api/music/preview', async (req) => {
+  const body = (req.body || {}) as any;
+  const trackId = String(body.trackId || 'lofi_chill');
+  const previewDir = path.join(getDataDir(), 'music-previews');
+  fs.mkdirSync(previewDir, { recursive: true });
+  const mp3Path = path.join(previewDir, `preview_${trackId}.mp3`);
+  const { track } = ensureFreeMusicTrackFile(trackId, mp3Path, 10);
+
+  const assetId = `asset_music_${track.id}`;
+  db.prepare(`
+    INSERT OR REPLACE INTO assets (id, projectId, kind, path, durationSec, metaJson, createdAt)
+    VALUES (?, 'music_library_preview', 'music', ?, 10, ?, ?)
+  `).run(
+    assetId,
+    mp3Path,
+    JSON.stringify({ trackId: track.id, title: track.title, bpm: track.bpm }),
+    new Date().toISOString()
+  );
+
+  return {
+    ok: true,
+    track,
+    audioUrl: `/api/assets/${assetId}`,
+  };
+});
+
+// ============================================================================
+// AI NEWS / TOPICS FEED (CÁC NGUỒN CHÍNH THỐNG UY TÍN)
+// ============================================================================
+interface AiNewsItem {
+  id: string;
+  title: string;
+  url: string;
+  summary: string;
+  source: string;
+  category: 'research' | 'industry' | 'vietnam';
+  publishedAt: string;
+}
+
+const AI_NEWS_SOURCES = [
+  { name: 'OpenAI News', url: 'https://openai.com/news/rss.xml', category: 'research' as const },
+  { name: 'Google AI Blog', url: 'https://blog.google/technology/ai/rss/', category: 'research' as const },
+  { name: 'Hugging Face Blog', url: 'https://huggingface.co/blog/feed.xml', category: 'research' as const },
+  { name: 'MIT Tech Review AI', url: 'https://www.technologyreview.com/topic/artificial-intelligence/feed', category: 'industry' as const },
+  { name: 'TechCrunch AI', url: 'https://techcrunch.com/category/artificial-intelligence/feed/', category: 'industry' as const },
+  { name: 'VnExpress Số hóa', url: 'https://vnexpress.net/rss/so-hoa.rss', category: 'vietnam' as const },
+];
+
+const CURATED_AI_FALLBACK: AiNewsItem[] = [
+  {
+    id: 'curated_1',
+    title: 'OpenAI News: Reasoning Models & Autonomous Coding Agents',
+    url: 'https://openai.com/news/',
+    summary: 'Các thế hệ mô hình suy luận sâu giúp tự động hóa quy trình lập trình, phân tích dữ liệu và kiểm thử phức tạp.',
+    source: 'OpenAI News',
+    category: 'research',
+    publishedAt: new Date().toISOString(),
+  },
+  {
+    id: 'curated_2',
+    title: 'Google AI: Multimodal Gemini & Real-Time Agentic Workflows',
+    url: 'https://blog.google/technology/ai/',
+    summary: 'Cập nhật mới nhất từ Google DeepMind về khả năng xử lý đa phương thức, video và tác nhân AI thời gian thực.',
+    source: 'Google AI Blog',
+    category: 'research',
+    publishedAt: new Date().toISOString(),
+  },
+  {
+    id: 'curated_3',
+    title: 'Hugging Face: Open-Weight Models & Local AI Inference Benchmarks',
+    url: 'https://huggingface.co/blog',
+    summary: 'Xu hướng mô hình mã nguồn mở tối ưu cho chạy cục bộ tốc độ cao và chi phí suy luận thấp.',
+    source: 'Hugging Face Blog',
+    category: 'research',
+    publishedAt: new Date().toISOString(),
+  },
+  {
+    id: 'curated_4',
+    title: 'MIT Technology Review: Enterprise AI Infrastructure & Chip Race',
+    url: 'https://www.technologyreview.com/topic/artificial-intelligence/',
+    summary: 'Phân tích chuyên sâu về cuộc đua hạ tầng trung tâm dữ liệu AI, chip bán dẫn và hiệu quả năng lượng.',
+    source: 'MIT Tech Review AI',
+    category: 'industry',
+    publishedAt: new Date().toISOString(),
+  },
+];
+
+let aiNewsCache: { items: AiNewsItem[]; cachedAt: number } | null = null;
+
+function cleanXmlText(raw: string): string {
+  return raw
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseRssOrAtomFeed(
+  xml: string,
+  sourceName: string,
+  category: 'research' | 'industry' | 'vietnam'
+): AiNewsItem[] {
+  const items: AiNewsItem[] = [];
+  const blocks = [
+    ...Array.from(xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)).map((m) => ({ type: 'rss', body: m[1]! })),
+    ...Array.from(xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)).map((m) => ({ type: 'atom', body: m[1]! })),
+  ];
+
+  for (const blk of blocks.slice(0, 6)) {
+    const titleMatch = blk.body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = cleanXmlText(titleMatch?.[1] || '');
+    if (!title) continue;
+
+    let link = '';
+    if (blk.type === 'rss') {
+      const linkMatch = blk.body.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+      link = cleanXmlText(linkMatch?.[1] || '');
+    } else {
+      const hrefMatch =
+        blk.body.match(/<link[^>]+rel=["']alternate["'][^>]+href=["']([^"']+)["']/i) ||
+        blk.body.match(/<link[^>]+href=["']([^"']+)["']/i);
+      link = (hrefMatch?.[1] || '').trim();
+    }
+    if (!/^https?:\/\//i.test(link)) continue;
+
+    const descMatch = blk.body.match(/<(?:description|summary|content)[^>]*>([\s\S]*?)<\/(?:description|summary|content)>/i);
+    const summary = cleanXmlText(descMatch?.[1] || '').slice(0, 260) || title;
+
+    const dateMatch = blk.body.match(/<(?:pubDate|published|updated)[^>]*>([\s\S]*?)<\/(?:pubDate|published|updated)>/i);
+    const rawDate = cleanXmlText(dateMatch?.[1] || '');
+    const parsedTime = rawDate ? Date.parse(rawDate) : NaN;
+    const publishedAt = Number.isFinite(parsedTime) ? new Date(parsedTime).toISOString() : new Date().toISOString();
+
+    items.push({
+      id: `ai_${crypto.createHash('md5').update(link).digest('hex').slice(0, 10)}`,
+      title,
+      url: link,
+      summary,
+      source: sourceName,
+      category,
+      publishedAt,
+    });
+  }
+
+  return items;
+}
+
+app.get('/api/ai-news', async (req) => {
+  const query = (req.query || {}) as any;
+  const forceRefresh = query.refresh === 'true';
+  const now = Date.now();
+
+  if (!forceRefresh && aiNewsCache && now - aiNewsCache.cachedAt < 10 * 60 * 1000) {
+    return {
+      items: aiNewsCache.items,
+      cachedAt: new Date(aiNewsCache.cachedAt).toISOString(),
+      sources: AI_NEWS_SOURCES.map((s) => ({ name: s.name, category: s.category })),
+    };
+  }
+
+  const results = await Promise.allSettled(
+    AI_NEWS_SOURCES.map(async (src) => {
+      const res = await fetch(src.url, {
+        headers: { 'User-Agent': 'VideoForge/2.0 (+https://github.com/nguyenhieu129/videoforge)' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return [];
+      const xml = await res.text();
+      return parseRssOrAtomFeed(xml, src.name, src.category);
+    })
+  );
+
+  const collected: AiNewsItem[] = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+      collected.push(...r.value);
+    }
+  }
+
+  // Lọc ưu tiên tin AI cho nguồn VnExpress Số hóa hoặc giữ toàn bộ nguồn AI chuyên biệt
+  const filtered = collected
+    .filter((item) => {
+      if (item.category !== 'vietnam') return true;
+      return /(ai|trí tuệ nhân tạo|chip|bán dẫn|robot|mô hình|openai|gemini|claude|nvidia|công nghệ|tự động)/i.test(
+        `${item.title} ${item.summary}`
+      );
+    })
+    .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+
+  const finalItems = filtered.length > 0 ? filtered : CURATED_AI_FALLBACK;
+  aiNewsCache = { items: finalItems, cachedAt: now };
+
+  return {
+    items: finalItems,
+    cachedAt: new Date(now).toISOString(),
+    sources: AI_NEWS_SOURCES.map((s) => ({ name: s.name, category: s.category })),
+  };
 });
 
 /**

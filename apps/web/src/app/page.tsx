@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { Sparkles, Plus } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { StudioWorkspace } from '../components/StudioWorkspace';
+import { AiNewsFeedPanel } from '../components/AiNewsFeedPanel';
 import { VoiceStudioPanel } from '../components/VoiceStudioPanel';
 import { SettingsPanel } from '../components/SettingsPanel';
 import { CreateProjectModal } from '../components/CreateProjectModal';
@@ -75,10 +76,11 @@ export default function VideoForgeAppPage() {
           </div>
         </div>
 
-        {/* 3 Nút Chuyển Trang Gọn */}
+        {/* Nút Chuyển Trang Gọn */}
         <nav className="flex items-center gap-1 rounded-xl border border-white/10 bg-slate-900/90 p-1">
           {[
             { id: 'studio' as const, label: '🎬 Bàn dựng Video' },
+            { id: 'ai_topics' as const, label: '📰 Chủ đề AI' },
             { id: 'voices_assets' as const, label: '🎙️ Giọng đọc & Tài nguyên' },
             { id: 'settings' as const, label: '⚙️ Cài đặt' },
           ].map((item) => (
@@ -129,6 +131,15 @@ export default function VideoForgeAppPage() {
           <StudioWorkspace
             projects={projects}
             onRefreshProjects={loadProjectsAndStatus}
+          />
+        )}
+
+        {activeSection === 'ai_topics' && (
+          <AiNewsFeedPanel
+            onCreateFromTopic={async (projectId, runId) => {
+              await loadProjectsAndStatus();
+              selectProjectAndRun(projectId, runId, 'pipeline');
+            }}
           />
         )}
 

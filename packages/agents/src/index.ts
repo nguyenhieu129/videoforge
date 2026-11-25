@@ -45,7 +45,7 @@ import { generateStructured, type ProviderConfigRecord } from '@videoforge/provi
 import { STYLE_PRESETS } from '@videoforge/templates';
 import {
   VoiceStudioClient,
-  pickCast,
+  pickRandomSingleVoice,
   synthesizeLocalFallbackTone,
   mergeVoiceSegmentsWithCrossfade,
   estimateWordTimingsFromSegments,
@@ -70,9 +70,12 @@ import {
   concatNormalizedClips,
   ensureStudioSfxPack,
   ensureBackgroundMusicFile,
+  ensureFreeMusicTrackFile,
+  FREE_MUSIC_TRACKS,
   probeMediaDurationSec,
   muxSingleSceneAudioAndSfx,
   assembleMuxedScenesWithDucking,
+  assembleMuxedScenesOnly,
   mixVoiceAndMusicWithDucking,
   generateSrtFile,
   extractVideoThumbnail,
@@ -117,6 +120,8 @@ export interface AgentExecutionContext {
   enableAutoBroll?: boolean;
   pexelsApiKey?: string;
   pixabayApiKey?: string;
+  enableBackgroundMusic?: boolean;
+  selectedMusicTrackId?: string;
   provider: ProviderConfigRecord;
   model: string;
   temperature?: number;
@@ -1090,16 +1095,37 @@ export async function runAssetAgent(
     license: 'CC0 1.0 Universal (VideoForge Procedural Studio SFX)',
   }));
 
-  // 2. Tạo nhạc nền đúng musicMood của Storyboard
+  // 2. Tạo nhạc nền (nếu người dùng bật nhạc nền)
   const mood: MusicMood = storyboard.musicMood || storyboard.scenes[0]?.musicMood || 'cyber_tech';
-  const musicPath = path.join(assetsDir, `background_music_${mood}.mp3`);
-  ensureBackgroundMusicFile(musicPath, totalDurationSec, mood);
-  ctx.onAssetCreated?.({
-    kind: 'music',
-    path: musicPath,
-    durationSec: totalDurationSec,
-    meta: { mood, license: 'CC0 / VideoForge Procedural Audio' },
-  });
+  const useMusic = ctx.enableBackgroundMusic !== false;
+  const moodToTrackId: Record<MusicMood, string> = {
+    cyber_tech: 'tech_pulse',
+    breaking_urgent: 'news_tension',
+    cinematic_story: 'cinematic_epic',
+    finance_pulse: 'corporate_inspire',
+    minimal_focus: 'minimal_ambient',
+  };
+  const chosenTrackId =
+    ctx.selectedMusicTrackId && ctx.selectedMusicTrackId !== 'auto'
+      ? ctx.selectedMusicTrackId
+      : moodToTrackId[mood] || 'lofi_chill';
+
+  let musicPath = '';
+  let musicTitle = 'Không dùng nhạc nền';
+  let musicBpm = 0;
+
+  if (useMusic) {
+    musicPath = path.join(assetsDir, `background_music_${chosenTrackId}.mp3`);
+    const generatedMusic = ensureFreeMusicTrackFile(chosenTrackId, musicPath, totalDurationSec);
+    musicTitle = generatedMusic.track.title;
+    musicBpm = generatedMusic.track.bpm;
+    ctx.onAssetCreated?.({
+      kind: 'music',
+      path: musicPath,
+      durationSec: totalDurationSec,
+      meta: { mood, trackId: chosenTrackId, title: musicTitle, license: generatedMusic.track.license },
+    });
+  }
 
   // 3. Tải ảnh bài gốc + B-Roll cho từng cảnh
   const articleImages = cleanArticle?.images || [];
@@ -1183,22 +1209,14 @@ export async function runAssetAgent(
     });
   }
 
-  const moodTitles: Record<MusicMood, string> = {
-    cyber_tech: 'Cyber Quantum Pulse',
-    breaking_urgent: 'Breaking Newsroom Urgency',
-    cinematic_story: 'Deep Horizon Documentary',
-    finance_pulse: 'Global Market Telemetry',
-    minimal_focus: 'Minimal Clarity Ambient',
-  };
-
   const output = AssetsOutputSchema.parse({
     images,
     music: {
       path: musicPath,
-      title: moodTitles[mood] || 'Studio Procedural Score',
-      bpm: mood === 'breaking_urgent' ? 128 : mood === 'finance_pulse' ? 120 : 112,
+      title: musicTitle,
+      bpm: musicBpm,
       mood,
-      license: 'CC0 1.0 Universal (Royalty-Free)',
+      license: useMusic ? 'CC0 1.0 Free Studio Audio' : 'None (Music Disabled)',
     },
     sfx: sfxItems,
     sfxPack,
@@ -1252,7 +1270,7 @@ export async function runVoiceStudioAgent(
     );
   }
 
-  const selectedCast = pickCast(
+  const selectedCast = pickRandomSingleVoice(
     activePool,
     ctx.voiceHistory,
     {
@@ -1966,13 +1984,17 @@ export async function runAssemblerAgent(
   const aspects: Array<'16:9' | '9:16'> =
     ctx.aspect === 'both' ? ['16:9', '9:16'] : [ctx.aspect];
 
-  const musicPath =
-    assetsOut?.music.path ||
-    ensureBackgroundMusicFile(
-      path.join(ctx.projectDir, 'assets', 'background_music.mp3'),
-      voiceOut.durationSec,
-      'cyber_tech'
-    );
+  const useMusic = ctx.enableBackgroundMusic !== false;
+  const musicPath = useMusic
+    ? assetsOut?.music.path ||
+      ensureFreeMusicTrackFile(
+        ctx.selectedMusicTrackId && ctx.selectedMusicTrackId !== 'auto'
+          ? ctx.selectedMusicTrackId
+          : FREE_MUSIC_TRACKS[0]!.id,
+        path.join(ctx.projectDir, 'assets', 'background_music.mp3'),
+        voiceOut.durationSec
+      ).path
+    : '';
 
   const result: AssemblerOutput = {};
 
@@ -1983,7 +2005,13 @@ export async function runAssemblerAgent(
 
     const allMuxed = aspectClips.length > 0 && aspectClips.every((c) => c.muxedAudio);
 
-    if (allMuxed) {
+    if (allMuxed && !useMusic) {
+      ctx.log('info', `Đang nối ${aspectClips.length} cảnh (không nhạc nền theo cài đặt) cho tỉ lệ ${asp}...`);
+      assembleMuxedScenesOnly({
+        muxedClipPaths: aspectClips.map((c) => c.clipPath),
+        outputPath: finalMp4Path,
+      });
+    } else if (allMuxed) {
       ctx.log('info', `Đang nối ${aspectClips.length} cảnh đã khóa Mux 1:1 & trộn nhạc nền Sidechain Ducking (${asp})...`);
       assembleMuxedScenesWithDucking({
         muxedClipPaths: aspectClips.map((c) => c.clipPath),
@@ -2002,12 +2030,21 @@ export async function runAssemblerAgent(
       });
       const mergedSilentPath = path.join(outDir, `_merged_${suffix}.mp4`);
       concatNormalizedClips(normalizedPaths, mergedSilentPath);
-      mixVoiceAndMusicWithDucking({
-        videoPath: mergedSilentPath,
-        voicePath: voiceOut.audioPath,
-        musicPath,
-        outputPath: finalMp4Path,
-      });
+      if (useMusic && musicPath) {
+        mixVoiceAndMusicWithDucking({
+          videoPath: mergedSilentPath,
+          voicePath: voiceOut.audioPath,
+          musicPath,
+          outputPath: finalMp4Path,
+        });
+      } else {
+        muxSingleSceneAudioAndSfx({
+          videoPath: mergedSilentPath,
+          voicePath: voiceOut.audioPath,
+          aspect: asp,
+          outputPath: finalMp4Path,
+        });
+      }
     }
 
     const thumbPath = path.join(outDir, `thumb_${suffix}.jpg`);

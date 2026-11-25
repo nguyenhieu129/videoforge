@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type WorkspaceSection = 'studio' | 'voices_assets' | 'settings';
+export type WorkspaceSection = 'studio' | 'ai_topics' | 'voices_assets' | 'settings';
 export type StudioCenterTab = 'script' | 'storyboard' | 'pipeline' | 'publish';
 
 // Giữ tương thích với các component phụ nếu cần

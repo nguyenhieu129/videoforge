@@ -285,6 +285,21 @@ export function StudioWorkspace({ projects, onRefreshProjects }: StudioWorkspace
     }
   };
 
+  const handleDeleteProject = async (e: React.MouseEvent, projectId: string, title: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`Xóa dự án "${title}" cùng toàn bộ video đã render?`)) return;
+    const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
+    if (res.ok) {
+      const remaining = projects.filter((p) => p.id !== projectId);
+      if (selectedProjectId === projectId) {
+        const next = remaining[0];
+        selectProjectAndRun(next?.id || null, next?.latestRun?.id || null);
+      }
+      flashToast('Đã xóa dự án!');
+      onRefreshProjects();
+    }
+  };
+
   const handleApproveStep = async (stepIndex: number) => {
     if (!activeRunId) return;
     await fetch(`/api/runs/${activeRunId}/steps/${stepIndex}/approve`, {
@@ -399,10 +414,12 @@ export function StudioWorkspace({ projects, onRefreshProjects }: StudioWorkspace
             }
 
             return (
-              <button
+              <div
                 key={p.id}
                 onClick={() => selectProjectAndRun(p.id, p.latestRun?.id || null)}
-                className={`w-full text-left rounded-xl p-2.5 border transition ${
+                role="button"
+                tabIndex={0}
+                className={`group w-full text-left rounded-xl p-2.5 border transition cursor-pointer ${
                   isSelected
                     ? 'border-purple-500/60 bg-purple-500/15 text-white'
                     : 'border-white/5 bg-slate-900/50 text-slate-300 hover:bg-slate-900 hover:border-white/15'
@@ -413,12 +430,22 @@ export function StudioWorkspace({ projects, onRefreshProjects }: StudioWorkspace
                     <span className={`h-2 w-2 rounded-full ${dotColor}`} />
                     {st}
                   </span>
-                  <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300">
-                    {p.aspect === 'both' ? '9:16+16:9' : p.aspect}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300">
+                      {p.aspect === 'both' ? '9:16+16:9' : p.aspect}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteProject(e, p.id, p.title)}
+                      title="Xóa dự án"
+                      className="opacity-60 group-hover:opacity-100 rounded p-0.5 text-rose-400 hover:bg-rose-500/20 hover:text-rose-300"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
                 <div className="text-xs font-bold line-clamp-2 leading-snug">{p.title}</div>
-              </button>
+              </div>
             );
           })}
 

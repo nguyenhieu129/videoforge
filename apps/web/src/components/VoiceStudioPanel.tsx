@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Sliders,
+  Trash2,
 } from 'lucide-react';
 
 export function VoiceStudioPanel() {
@@ -144,6 +145,14 @@ export function VoiceStudioPanel() {
     loadVoiceData(false, showAliases);
   };
 
+  const handleDeleteVoice = async (voice: any) => {
+    if (!window.confirm(`Xóa giọng "${voice.name}" khỏi danh sách Voice Pool?`)) return;
+    await fetch(`/api/voices/${encodeURIComponent(voice.voiceId || voice.id)}`, {
+      method: 'DELETE',
+    });
+    loadVoiceData(false, showAliases);
+  };
+
   const handleSaveCastSettings = async () => {
     await fetch('/api/settings', {
       method: 'PUT',
@@ -241,7 +250,7 @@ export function VoiceStudioPanel() {
           <div className="flex items-center justify-between">
             <h3 className="text-base font-extrabold text-white flex items-center gap-2">
               <Users className="h-4 w-4 text-purple-400" />
-              Cấu hình Voice Cast (Phối hợp 2 giọng Nam & Nữ)
+              Cấu hình Chọn Giọng Đọc (Ngẫu nhiên 1 giọng — Không trộn Nam/Nữ)
             </h3>
             <button
               onClick={handlePreviewCastPair}
@@ -317,7 +326,7 @@ export function VoiceStudioPanel() {
 
           {previewNextCast && (
             <div className="rounded-2xl border border-purple-500/30 bg-purple-950/20 p-3.5 text-xs">
-              <div className="font-bold text-purple-300">Dự kiến cặp giọng cho Video tiếp theo:</div>
+              <div className="font-bold text-purple-300">Dự kiến giọng đọc cho Video tiếp theo:</div>
               <div className="mt-1 text-slate-200">{previewNextCast.reason}</div>
             </div>
           )}
@@ -520,12 +529,23 @@ export function VoiceStudioPanel() {
                     {v.consentNote || '—'}
                   </td>
                   <td className="py-2.5 px-3">
-                    <button
-                      onClick={() => handlePreviewSingle(v.id)}
-                      className="rounded-lg bg-cyan-500/20 px-2.5 py-1 text-xs font-bold text-cyan-300 hover:bg-cyan-500/30"
-                    >
-                      ▶ Nghe
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handlePreviewSingle(v.id)}
+                        className="rounded-lg bg-cyan-500/20 px-2.5 py-1 text-xs font-bold text-cyan-300 hover:bg-cyan-500/30"
+                      >
+                        ▶ Nghe
+                      </button>
+                      {v.type !== 'openai_alias' && (
+                        <button
+                          onClick={() => handleDeleteVoice(v)}
+                          title="Xóa giọng đọc"
+                          className="rounded-lg bg-rose-500/15 px-2 py-1 text-xs font-bold text-rose-300 hover:bg-rose-500/30"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

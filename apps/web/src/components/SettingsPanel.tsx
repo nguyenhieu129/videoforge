@@ -14,6 +14,8 @@ import {
   Play,
   Save,
   RefreshCw,
+  Trash2,
+  Music,
 } from 'lucide-react';
 
 type SettingsTabId = 'ai' | 'voice' | 'broll_system';
@@ -44,7 +46,7 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [agentModels, setAgentModels] = useState<any[]>([]);
 
-  // Tab 2: Giọng đọc & Phụ đề
+  // Tab 2: Giọng đọc, Phụ đề & Nhạc nền
   const [voiceStudioUrl, setVoiceStudioUrl] = useState('http://localhost:3900');
   const [voices, setVoices] = useState<any[]>([]);
   const [testingVoice, setTestingVoice] = useState(false);
@@ -52,6 +54,11 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
   const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
   const [leadCaptionColor, setLeadCaptionColor] = useState('#38BDF8');
   const [accentCaptionColor, setAccentCaptionColor] = useState('#F472B6');
+  const [enableBackgroundMusic, setEnableBackgroundMusic] = useState(true);
+  const [selectedMusicTrackId, setSelectedMusicTrackId] = useState('auto');
+  const [musicTracks, setMusicTracks] = useState<any[]>([]);
+  const [previewMusicUrl, setPreviewMusicUrl] = useState<string | null>(null);
+  const [previewingMusicId, setPreviewingMusicId] = useState<string | null>(null);
 
   // Tab 3: Kho Ảnh B-Roll & Hệ thống
   const [enableAutoBroll, setEnableAutoBroll] = useState(true);
@@ -66,11 +73,12 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
   };
 
   const loadAll = async () => {
-    const [pRes, amRes, sRes, vRes] = await Promise.all([
+    const [pRes, amRes, sRes, vRes, mRes] = await Promise.all([
       fetch('/api/providers'),
       fetch('/api/agent-models'),
       fetch('/api/settings'),
       fetch('/api/voices'),
+      fetch('/api/music/tracks'),
     ]);
 
     let loadedProvs: any[] = [];
@@ -113,6 +121,8 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
       setVoiceStudioUrl(s.voiceStudioUrl || 'http://localhost:3900');
       setLeadCaptionColor(s.leadCaptionColor || '#38BDF8');
       setAccentCaptionColor(s.accentCaptionColor || '#F472B6');
+      setEnableBackgroundMusic(s.enableBackgroundMusic !== false);
+      setSelectedMusicTrackId(s.selectedMusicTrackId || 'auto');
       setEnableAutoBroll(s.enableAutoBroll !== false);
       setPexelsApiKey(s.pexelsApiKey || '');
       setPixabayApiKey(s.pixabayApiKey || '');
@@ -124,6 +134,11 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
     if (vRes.ok) {
       const vd = await vRes.json();
       setVoices(vd.voices || []);
+    }
+
+    if (mRes.ok) {
+      const md = await mRes.json();
+      setMusicTracks(md.tracks || []);
     }
   };
 
@@ -285,6 +300,33 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
     }
   };
 
+  const handleDeleteVoice = async (voice: any) => {
+    if (!window.confirm(`Xóa giọng "${voice.name}" khỏi danh sách?`)) return;
+    const res = await fetch(`/api/voices/${encodeURIComponent(voice.voiceId || voice.id)}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setVoices(data.voices || []);
+      showToast(true, `Đã xóa giọng "${voice.name}" khỏi danh sách!`);
+    }
+  };
+
+  const handlePreviewMusic = async (trackId: string) => {
+    setPreviewingMusicId(trackId);
+    try {
+      const res = await fetch('/api/music/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackId }),
+      });
+      const d = await res.json();
+      if (d.audioUrl) setPreviewMusicUrl(`${d.audioUrl}?t=${Date.now()}`);
+    } finally {
+      setPreviewingMusicId(null);
+    }
+  };
+
   const handleSaveVoiceAndCaptions = async () => {
     await fetch('/api/settings', {
       method: 'PUT',
@@ -293,9 +335,11 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
         voiceStudioUrl,
         leadCaptionColor,
         accentCaptionColor,
+        enableBackgroundMusic,
+        selectedMusicTrackId,
       }),
     });
-    showToast(true, 'Đã lưu cấu hình Giọng đọc & Màu phụ đề!');
+    showToast(true, 'Đã lưu cấu hình Giọng đọc, Phụ đề & Nhạc nền!');
     onConfigSaved?.();
   };
 
@@ -324,7 +368,7 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
           <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-slate-900/90 p-1">
             {[
               { id: 'ai' as const, label: '🤖 Kết nối AI (Thiết lập 1 Chạm)', icon: Bot },
-              { id: 'voice' as const, label: '🎙️ Giọng đọc & Phụ đề', icon: Mic },
+              { id: 'voice' as const, label: '🎙️ Giọng đọc & Nhạc nền', icon: Mic },
               { id: 'broll_system' as const, label: '🖼️ Kho Ảnh B-Roll & Hệ thống', icon: ImageIcon },
             ].map((t) => (
               <button
@@ -705,6 +749,14 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
                         <Play className="h-3 w-3" />
                         {previewingVoiceId === (v.voiceId || v.id) ? '...' : 'Nghe thử'}
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteVoice(v)}
+                        title="Xóa giọng đọc này"
+                        className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/25"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                       <input
                         type="checkbox"
                         checked={Boolean(v.enabled)}
@@ -714,6 +766,109 @@ export function SettingsPanel({ onConfigSaved }: { onConfigSaved?: () => void })
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* Kho Nhạc Nền Miễn Phí (Bật/Tắt + Nghe thử + Chọn bản nhạc) */}
+              <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Music className="h-4 w-4 text-purple-400" />
+                    <div>
+                      <div className="text-xs font-extrabold text-white">
+                        Kho Nhạc Nền Miễn Phí (Tự động giảm âm lượng khi có giọng đọc)
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Tích chọn có dùng nhạc nền hay không, hoặc nghe thử và chọn cố định bản nhạc yêu thích
+                      </div>
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 rounded-xl border border-white/15 bg-slate-900 px-3 py-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enableBackgroundMusic}
+                      onChange={(e) => setEnableBackgroundMusic(e.target.checked)}
+                      className="h-4 w-4 accent-emerald-500"
+                    />
+                    <span className="text-xs font-bold text-white">
+                      {enableBackgroundMusic ? 'Đang bật nhạc nền' : 'Đã tắt nhạc nền'}
+                    </span>
+                  </label>
+                </div>
+
+                {previewMusicUrl && (
+                  <div className="flex items-center gap-3 rounded-xl border border-purple-500/30 bg-purple-950/30 px-4 py-2">
+                    <span className="text-xs font-bold text-purple-300">Nghe thử nhạc:</span>
+                    <audio controls autoPlay src={previewMusicUrl} className="h-8 flex-1" />
+                  </div>
+                )}
+
+                {enableBackgroundMusic && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label
+                      className={`sm:col-span-2 flex items-center justify-between rounded-xl border px-3.5 py-2 cursor-pointer ${
+                        selectedMusicTrackId === 'auto'
+                          ? 'border-purple-500 bg-purple-500/15'
+                          : 'border-white/10 bg-slate-900/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <input
+                          type="radio"
+                          name="musicTrack"
+                          checked={selectedMusicTrackId === 'auto'}
+                          onChange={() => setSelectedMusicTrackId('auto')}
+                          className="accent-purple-500"
+                        />
+                        <div>
+                          <div className="text-xs font-extrabold text-white">
+                            ✨ Tự động chọn nhạc theo chủ đề video
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            AI tự phối nhạc công nghệ, tin nóng, tài chính hay kể chuyện phù hợp từng bài
+                          </div>
+                        </div>
+                      </div>
+                    </label>
+
+                    {musicTracks.map((tr) => (
+                      <div
+                        key={tr.id}
+                        className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
+                          selectedMusicTrackId === tr.id
+                            ? 'border-cyan-400 bg-cyan-500/15'
+                            : 'border-white/10 bg-slate-900/70'
+                        }`}
+                      >
+                        <label className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-0">
+                          <input
+                            type="radio"
+                            name="musicTrack"
+                            checked={selectedMusicTrackId === tr.id}
+                            onChange={() => setSelectedMusicTrackId(tr.id)}
+                            className="accent-cyan-400 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs font-extrabold text-white truncate">
+                              {tr.title}{' '}
+                              <span className="text-[10px] font-mono text-cyan-300">({tr.bpm} BPM)</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 truncate">{tr.description}</div>
+                          </div>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handlePreviewMusic(tr.id)}
+                          disabled={previewingMusicId === tr.id}
+                          className="flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:bg-white/10 shrink-0"
+                        >
+                          <Play className="h-3 w-3" />
+                          {previewingMusicId === tr.id ? '...' : 'Nghe thử'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

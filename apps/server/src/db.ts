@@ -344,6 +344,8 @@ function seedDefaultData() {
       enableAutoBroll: true,
       pexelsApiKey: '',
       pixabayApiKey: '',
+      enableBackgroundMusic: true,
+      selectedMusicTrackId: 'auto',
       maxParallelScenes: Number(process.env.MAX_PARALLEL_SCENES || 2),
       blenderEnabled: false,
       blenderMcpUrl: process.env.BLENDER_MCP_URL || '',
@@ -369,6 +371,8 @@ export function getGlobalSettings(): Record<string, any> {
   if (parsed.enableAutoBroll === undefined) parsed.enableAutoBroll = true;
   if (parsed.pexelsApiKey === undefined) parsed.pexelsApiKey = '';
   if (parsed.pixabayApiKey === undefined) parsed.pixabayApiKey = '';
+  if (parsed.enableBackgroundMusic === undefined) parsed.enableBackgroundMusic = true;
+  if (parsed.selectedMusicTrackId === undefined) parsed.selectedMusicTrackId = 'auto';
   return parsed;
 }
 
