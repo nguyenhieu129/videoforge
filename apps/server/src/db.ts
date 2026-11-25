@@ -339,7 +339,11 @@ function seedDefaultData() {
       defaultStylePreset: 'neon_cyber',
       defaultScoreThreshold: 5.0,
       disabledSteps: [] as number[],
-      approvalSteps: [6, 8, 17],
+      approvalSteps: [] as number[],
+      autoApproveAll: true,
+      enableAutoBroll: true,
+      pexelsApiKey: '',
+      pixabayApiKey: '',
       maxParallelScenes: Number(process.env.MAX_PARALLEL_SCENES || 2),
       blenderEnabled: false,
       blenderMcpUrl: process.env.BLENDER_MCP_URL || '',
@@ -362,6 +366,9 @@ export function getGlobalSettings(): Record<string, any> {
   ) {
     parsed.voiceStudioUrl = process.env.VOICE_STUDIO_URL.replace(/\/+$/, '');
   }
+  if (parsed.enableAutoBroll === undefined) parsed.enableAutoBroll = true;
+  if (parsed.pexelsApiKey === undefined) parsed.pexelsApiKey = '';
+  if (parsed.pixabayApiKey === undefined) parsed.pixabayApiKey = '';
   return parsed;
 }
 

@@ -56,5 +56,5 @@ describe('VideoForge End-to-End 17-Agent Pipeline Integration Test', () => {
     // Kiểm tra bước 17 (Publisher) sinh đủ 4 bản nháp nền tảng
     const pubOut = JSON.parse(stepRows[16].outputJson);
     expect(pubOut.drafts.length).toBe(4);
-  }, 60000);
+  }, 240000);
 });

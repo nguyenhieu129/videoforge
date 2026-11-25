@@ -190,13 +190,103 @@ function normalizeLlmPayload(rawObj: any): any {
     obj.hookAngles = (obj.hooks || obj.hook_angles).map((h: any) => String(h));
   }
 
-  // Chuẩn hóa Script scenes[]
+  // Chuẩn hóa phản hồi Generative HTML/CSS từ SceneBuilderAgent
+  if (!obj.customHtmlStage && typeof (obj.html || obj.stageHtml || obj.htmlStage || obj.custom_html_stage) === 'string') {
+    obj.customHtmlStage = obj.html || obj.stageHtml || obj.htmlStage || obj.custom_html_stage;
+  }
+  if (!obj.customCss && typeof (obj.css || obj.stageCss || obj.custom_css) === 'string') {
+    obj.customCss = obj.css || obj.stageCss || obj.custom_css;
+  }
+
+  // Chuẩn hóa Script scenes[] hoặc Storyboard scenes[]
   if (Array.isArray(obj.scenes)) {
     const firstScene = obj.scenes[0];
     const isStoryboard =
-      firstScene && (firstScene.engine || firstScene.layout || firstScene.palette || firstScene.visualNotes);
+      firstScene &&
+      (firstScene.engine ||
+        firstScene.layout ||
+        firstScene.palette ||
+        firstScene.visualConcept ||
+        firstScene.visual_concept ||
+        firstScene.musicMood ||
+        firstScene.visualNotes);
 
-    if (!isStoryboard) {
+    if (isStoryboard) {
+      const validMoods = new Set([
+        'cyber_tech',
+        'breaking_urgent',
+        'cinematic_story',
+        'finance_pulse',
+        'minimal_focus',
+      ]);
+      const validLayouts = new Set([
+        'hero_headline',
+        'split_comparison',
+        'stat_spotlight',
+        'quote_card',
+        'kinetic_typography',
+        'threejs_particles',
+        'chart_data',
+      ]);
+      const validTransitions = new Set(['fade', 'slide_up', 'zoom_burst', 'glitch', 'wipe']);
+
+      const rootMood = String(obj.musicMood || obj.music_mood || '').trim();
+      if (validMoods.has(rootMood)) {
+        obj.musicMood = rootMood;
+      } else {
+        delete obj.musicMood;
+      }
+
+      obj.scenes = obj.scenes.map((sc: any, idx: number) => {
+        const concept = String(sc.visualConcept || sc.visual_concept || sc.style || 'cyber_hud').trim();
+        const rawLayout = String(sc.layout || '').trim();
+        const inferredLayout = validLayouts.has(rawLayout)
+          ? rawLayout
+          : concept.includes('data') || concept.includes('bloomberg')
+            ? 'chart_data'
+            : concept.includes('split') || concept.includes('versus')
+              ? 'split_comparison'
+              : concept.includes('stat')
+                ? 'stat_spotlight'
+                : concept.includes('quote') || concept.includes('editorial')
+                  ? 'quote_card'
+                  : 'kinetic_typography';
+
+        const pal = sc.palette || {};
+        const rawTrans = String(sc.transitions || sc.transition || 'slide_up').trim();
+        const scMood = String(sc.musicMood || sc.music_mood || obj.musicMood || '').trim();
+
+        return {
+          id: String(sc.id || sc.sceneId || `scene_${idx + 1}`),
+          engine: 'hyperframes',
+          visualConcept: concept,
+          layout: inferredLayout,
+          palette: {
+            primary: String(pal.primary || '#38BDF8'),
+            secondary: String(pal.secondary || '#818CF8'),
+            accent: String(pal.accent || '#FACC15'),
+            bg: String(pal.bg || pal.background || '#090D16'),
+            text: String(pal.text || '#F8FAFC'),
+          },
+          transitions: validTransitions.has(rawTrans) ? rawTrans : 'slide_up',
+          useThreeJs: Boolean(sc.useThreeJs ?? concept.includes('cyber')),
+          ...(validMoods.has(scMood) ? { musicMood: scMood } : {}),
+          assetsNeeded: Array.isArray(sc.assetsNeeded) ? sc.assetsNeeded.map(String) : [],
+          visualNotes: String(sc.visualNotes || sc.visual_notes || concept),
+        };
+      });
+    } else {
+      const validEffects = new Set([
+        'slam_impact',
+        'marker_highlight',
+        'counter_stat',
+        'split_versus',
+        'glitch_focus',
+        'cinematic_minimal',
+        'terminal_type',
+      ]);
+      const validSfx = new Set(['impact', 'whoosh', 'pop', 'riser', 'click', 'none']);
+
       obj.hook = String(obj.hook || obj.intro || obj.opening || firstScene?.onScreenText || firstScene?.title || 'Điểm nhấn quan trọng');
       obj.cta = String(obj.cta || obj.outro || obj.callToAction || 'Theo dõi và để lại bình luận về góc nhìn của bạn!');
       obj.scenes = obj.scenes.map((sc: any, idx: number) => {
@@ -242,12 +332,42 @@ function normalizeLlmPayload(rawObj: any): any {
             .slice(0, 4);
         }
 
+        let visualCues: Array<any> | undefined;
+        const rawCues = sc.visualCues || sc.visual_cues || sc.cues || sc.keywords;
+        if (Array.isArray(rawCues) && rawCues.length > 0) {
+          visualCues = rawCues
+            .map((c: any) => {
+              const eff = String(c?.effect || 'slam_impact').trim();
+              const sfx = String(c?.sfx || 'pop').trim();
+              const triggerPhrase = String(c?.triggerPhrase || c?.trigger_phrase || c?.phrase || c?.keyword || '').trim();
+              const displayHeadline = String(
+                c?.displayHeadline || c?.display_headline || c?.headline || triggerPhrase
+              )
+                .trim()
+                .toUpperCase();
+              if (!triggerPhrase && !displayHeadline) return null;
+              return {
+                triggerPhrase: triggerPhrase || displayHeadline,
+                displayHeadline: displayHeadline || triggerPhrase.toUpperCase(),
+                ...(c?.subLabel || c?.sub_label ? { subLabel: String(c.subLabel || c.sub_label) } : {}),
+                effect: validEffects.has(eff) ? eff : 'slam_impact',
+                sfx: validSfx.has(sfx) ? sfx : 'pop',
+              };
+            })
+            .filter(Boolean)
+            .slice(0, 5);
+        }
+
+        const brollQuery = String(sc.brollQuery || sc.broll_query || sc.broll || sc.searchQuery || '').trim();
+
         return {
           id: String(sc.id || sc.sceneId || `scene_${idx + 1}`),
           durationSec,
           onScreenText,
           segments: segments.length > 0 ? segments : [{ speaker: 'lead', text: onScreenText }],
           ...(dataPoints && dataPoints.length > 0 ? { dataPoints } : {}),
+          ...(visualCues && visualCues.length > 0 ? { visualCues } : {}),
+          ...(brollQuery ? { brollQuery } : {}),
         };
       });
     }

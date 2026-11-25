@@ -333,9 +333,12 @@ export async function executePipelineOrchestrator(runId: string, startFromStep =
         enabled: true,
       };
 
-    const brandKitRow = project.brandKitId
-      ? (db.prepare('SELECT * FROM brand_kits WHERE id = ?').get(project.brandKitId) as any)
-      : null;
+    const isDefaultPresetKit =
+      typeof project.brandKitId === 'string' && project.brandKitId.startsWith('bk_');
+    const brandKitRow =
+      project.brandKitId && !isDefaultPresetKit
+        ? (db.prepare('SELECT * FROM brand_kits WHERE id = ?').get(project.brandKitId) as any)
+        : null;
 
     const stepStartMs = Date.now();
     const attempt = Number(stepRow.attempt || 0) + 1;
@@ -387,6 +390,9 @@ export async function executePipelineOrchestrator(runId: string, startFromStep =
       maxParallelScenes: Number(globalSettings.maxParallelScenes || 2),
       blenderEnabled: Boolean(globalSettings.blenderEnabled),
       blenderMcpUrl: globalSettings.blenderMcpUrl,
+      enableAutoBroll: globalSettings.enableAutoBroll !== false,
+      pexelsApiKey: globalSettings.pexelsApiKey || '',
+      pixabayApiKey: globalSettings.pixabayApiKey || '',
       provider: providerRecord,
       model: chosenCandidate.model,
       temperature,
@@ -688,17 +694,17 @@ async function executeSingleAgentStep(
     case 8:
       return runDirectorAgent(ctx, activeScript, strategy);
     case 9:
-      return runAssetAgent(ctx, storyboard, strategy.durationSec);
+      return runAssetAgent(ctx, storyboard, strategy.durationSec, activeScript, cleanArticle);
     case 10:
       return runVoiceStudioAgent(ctx, activeScript);
     case 11:
       return runCaptionAgent(ctx, voiceOut);
     case 12:
-      return runSceneBuilderAgent(ctx, activeScript, storyboard, voiceOut, captionsOut);
+      return runSceneBuilderAgent(ctx, activeScript, storyboard, voiceOut, captionsOut, assetsOut);
     case 13:
       return runLintPreviewAgent(ctx, sceneBuilderOut, activeScript, storyboard);
     case 14:
-      return runRendererAgent(ctx, sceneBuilderOut, activeScript, storyboard);
+      return runRendererAgent(ctx, sceneBuilderOut, activeScript, storyboard, voiceOut, assetsOut);
     case 15:
       return runAssemblerAgent(ctx, rendererOut, voiceOut, assetsOut);
     case 16:
@@ -708,4 +714,257 @@ async function executeSingleAgentStep(
     default:
       throw new Error(`Bước không hợp lệ: ${stepIdx}`);
   }
+}
+
+/**
+ * Đổi thiết kế & Render lại duy nhất 1 cảnh (sceneId) rồi ghép nhanh lại file MP4 tổng (Hạng mục 5.2)
+ */
+export async function rerollSingleScene(
+  projectId: string,
+  sceneId: string,
+  overrides?: {
+    visualConcept?: string;
+    brollQuery?: string;
+    onScreenText?: string;
+    visualCues?: any[];
+    palette?: { primary: string; secondary: string; accent: string; bg: string; text: string };
+  }
+) {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as any;
+  if (!project) throw new Error('Không tìm thấy Project');
+
+  const run = db
+    .prepare('SELECT * FROM runs WHERE projectId = ? ORDER BY startedAt DESC LIMIT 1')
+    .get(projectId) as any;
+  if (!run) throw new Error('Dự án chưa có phiên chạy nào để reroll cảnh');
+
+  const runId: string = run.id;
+  const projectDir = path.join(getDataDir(), 'projects', project.id, runId);
+  const globalSettings = getGlobalSettings();
+
+  const { candidates, temperature } = getAgentModelAndFallbacks('SceneBuilder');
+  const chosenCandidate = candidates[0]!;
+  const providerRecord =
+    getProviderRaw(chosenCandidate.providerId) ||
+    getProviderRaw('provider_builtin') || {
+      id: 'provider_builtin',
+      name: 'Built-in',
+      type: 'openai_compatible' as const,
+      baseUrl: 'builtin://videoforge',
+      models: ['gpt-4o-mini'],
+      enabled: true,
+    };
+
+  const step14Row = db
+    .prepare('SELECT id FROM step_runs WHERE runId = ? AND stepIndex = 14')
+    .get(runId) as any;
+  const stepRunId = step14Row?.id || `sr_${runId}_14`;
+
+  const ctx: AgentExecutionContext = {
+    projectId: project.id,
+    runId,
+    projectDir,
+    sourceType: project.sourceType,
+    sourceRef: project.sourceRef,
+    title: project.title,
+    aspect: project.aspect,
+    stylePreset: project.stylePreset,
+    scoreThreshold: Number(project.scoreThreshold ?? 5.0),
+    castMode: project.castMode || 'lead_accent',
+    castSelectionMode: project.castSelectionMode || 'auto_rotate',
+    avoidLastNVideos: 3,
+    voiceCastSeed: Number(run.voiceCastSeed || 12345),
+    voiceStudioUrl: globalSettings.voiceStudioUrl || 'http://localhost:3900',
+    voicePool: getVoicePoolFromDb(),
+    voiceHistory: getVoiceHistoryFromDb(),
+    leadCaptionColor: globalSettings.leadCaptionColor || '#38BDF8',
+    accentCaptionColor: globalSettings.accentCaptionColor || '#F472B6',
+    maxParallelScenes: 2,
+    blenderEnabled: false,
+    enableAutoBroll: globalSettings.enableAutoBroll !== false,
+    pexelsApiKey: globalSettings.pexelsApiKey || '',
+    pixabayApiKey: globalSettings.pixabayApiKey || '',
+    provider: providerRecord,
+    model: chosenCandidate.model,
+    temperature,
+    log: (level, message, meta) => appendStepLog(runId, stepRunId, 14, level, `[Reroll ${sceneId}] ${message}`, meta),
+    onProgress: (percent) => emitRunEvent(runId, { type: 'step.progress', step: 14, percent }),
+    onAssetCreated: (asset) => {
+      const assetId = createAssetRecord({
+        projectId: project.id,
+        runId,
+        stepRunId,
+        ...asset,
+      });
+      emitRunEvent(runId, { type: 'asset.created', assetId, kind: asset.kind, step: 14 });
+      return assetId;
+    },
+  };
+
+  const scriptFrom6 = getStepOutput(runId, 6);
+  const factCheckFrom7 = getStepOutput(runId, 7);
+  const activeScript = factCheckFrom7?.fixedScript || scriptFrom6;
+  const storyboard = getStepOutput(runId, 8);
+  const assetsOut = getStepOutput(runId, 9);
+  const voiceOut = getStepOutput(runId, 10);
+  const captionsOut = getStepOutput(runId, 11);
+  const sceneBuilderOut = getStepOutput(runId, 12);
+  const previewOut = getStepOutput(runId, 13);
+  const rendererOut = getStepOutput(runId, 14);
+  const strategy = getStepOutput(runId, 5) || {
+    format: 'explainer' as const,
+    durationSec: 25,
+    style: project.stylePreset,
+    pacing: 'snappy' as const,
+    aspect: project.aspect,
+    castMode: project.castMode,
+  };
+
+  if (!activeScript || !storyboard || !voiceOut || !sceneBuilderOut || !rendererOut) {
+    throw new Error('Cần chạy xong tối thiểu tới bước 14 trước khi Reroll cảnh lẻ');
+  }
+
+  const targetSceneIdx = activeScript.scenes.findIndex((s: any) => s.id === sceneId);
+  if (targetSceneIdx === -1) {
+    throw new Error(`Không tìm thấy cảnh ${sceneId} trong kịch bản`);
+  }
+
+  // 1. Cập nhật Script của cảnh nếu có brollQuery / onScreenText / visualCues mới
+  const targetScriptScene = {
+    ...activeScript.scenes[targetSceneIdx],
+    ...(overrides?.brollQuery ? { brollQuery: overrides.brollQuery } : {}),
+    ...(overrides?.onScreenText ? { onScreenText: overrides.onScreenText } : {}),
+    ...(overrides?.visualCues ? { visualCues: overrides.visualCues } : {}),
+  };
+  activeScript.scenes[targetSceneIdx] = targetScriptScene;
+
+  // 2. Đạo diễn lại phong cách / bảng màu mới cho riêng cảnh này
+  const singleScript = { ...activeScript, scenes: [targetScriptScene] };
+  const dirRes = await runDirectorAgent(ctx, singleScript, strategy);
+  const altConcepts = [
+    'editorial_news',
+    'bloomberg_data',
+    'cyber_hud',
+    'cinematic_broll',
+    'minimal_bold',
+    'paper_cutout',
+  ];
+  const altPalettes = [
+    { primary: '#F59E0B', secondary: '#10B981', accent: '#FACC15', bg: '#070B14', text: '#F8FAFC' },
+    { primary: '#DC2626', secondary: '#0F172A', accent: '#EA580C', bg: '#F8FAFC', text: '#0F172A' },
+    { primary: '#06B6D4', secondary: '#8B5CF6', accent: '#38BDF8', bg: '#050816', text: '#F8FAFC' },
+    { primary: '#EC4899', secondary: '#6366F1', accent: '#FDE047', bg: '#11091D', text: '#FDF2F8' },
+  ];
+
+  const prevSbScene = storyboard.scenes.find((s: any) => s.id === sceneId) || storyboard.scenes[0];
+  let newSbScene = dirRes.output.scenes[0]!;
+  if (overrides?.visualConcept) {
+    newSbScene = { ...newSbScene, visualConcept: overrides.visualConcept };
+  } else if (newSbScene.visualConcept === prevSbScene?.visualConcept) {
+    const nextIdx = (altConcepts.indexOf(prevSbScene.visualConcept) + 1) % altConcepts.length;
+    newSbScene = {
+      ...newSbScene,
+      visualConcept: altConcepts[nextIdx]!,
+      palette: overrides?.palette || altPalettes[nextIdx % altPalettes.length]!,
+    };
+  }
+  if (overrides?.palette) {
+    newSbScene = { ...newSbScene, palette: overrides.palette };
+  }
+
+  storyboard.scenes = storyboard.scenes.map((s: any) => (s.id === sceneId ? newSbScene : s));
+
+  // 3. Tải lại B-Roll riêng cho cảnh này (xóa ảnh cũ của cảnh để buộc tải mới nếu đổi brollQuery)
+  const oldImgPath = path.join(projectDir, 'assets', `broll_${sceneId}.jpg`);
+  if (overrides?.brollQuery && fs.existsSync(oldImgPath)) {
+    try {
+      fs.unlinkSync(oldImgPath);
+    } catch {
+      // ignore
+    }
+  }
+  const singleSb = { ...storyboard, scenes: [newSbScene] };
+  const singleAssetRes = await runAssetAgent(ctx, singleSb, targetScriptScene.durationSec, singleScript);
+  if (assetsOut && singleAssetRes.output.images[0]) {
+    const updatedImg = singleAssetRes.output.images[0];
+    const existIdx = assetsOut.images.findIndex((x: any) => x.sceneId === sceneId);
+    if (existIdx >= 0) assetsOut.images[existIdx] = updatedImg;
+    else assetsOut.images.push(updatedImg);
+  }
+
+  // 4. Sinh lại HTML/CSS & Chụp lại Snapshot & Render 30fps + Mux 1:1 riêng cho sceneId
+  const singleBuildRes = await runSceneBuilderAgent(
+    ctx,
+    singleScript,
+    singleSb,
+    voiceOut,
+    captionsOut || {
+      words: voiceOut.wordTimings || [],
+      srtPath: path.join(projectDir, 'captions', 'captions.srt'),
+      methodUsed: 'ffprobe_character_estimate',
+      style: {
+        leadColor: ctx.leadCaptionColor,
+        accentColor: ctx.accentCaptionColor,
+        fontFamily: 'Be Vietnam Pro',
+        fontSize9x16: 54,
+        fontSize16x9: 42,
+      },
+    },
+    assetsOut || singleAssetRes.output
+  );
+  const newSceneCode = singleBuildRes.output.scenes[0]!;
+  sceneBuilderOut.scenes = sceneBuilderOut.scenes.map((s: any) =>
+    s.id === sceneId || s.sceneId === sceneId ? newSceneCode : s
+  );
+
+  const singlePreviewRes = await runLintPreviewAgent(ctx, singleBuildRes.output, singleScript, singleSb);
+  if (previewOut) {
+    previewOut.snapshots = [
+      ...previewOut.snapshots.filter((sn: any) => sn.sceneId !== sceneId),
+      ...singlePreviewRes.output.snapshots,
+    ];
+  }
+
+  const singleRenderRes = await runRendererAgent(
+    ctx,
+    singleBuildRes.output,
+    singleScript,
+    singleSb,
+    voiceOut,
+    assetsOut || singleAssetRes.output
+  );
+  rendererOut.clips = [
+    ...rendererOut.clips.filter((c: any) => c.sceneId !== sceneId),
+    ...singleRenderRes.output.clips,
+  ];
+
+  // 5. Ghép nhanh lại toàn bộ file final_16x9.mp4 & final_9x16.mp4
+  const asmRes = await runAssemblerAgent(ctx, rendererOut, voiceOut, assetsOut || singleAssetRes.output);
+
+  // Cập nhật các step_runs trong SQLite
+  const updateStepOut = db.prepare(
+    'UPDATE step_runs SET outputJson = ?, finishedAt = ? WHERE runId = ? AND stepIndex = ?'
+  );
+  const nowIso = new Date().toISOString();
+  updateStepOut.run(JSON.stringify(activeScript), nowIso, runId, 6);
+  if (factCheckFrom7) {
+    updateStepOut.run(JSON.stringify({ ...factCheckFrom7, fixedScript: activeScript }), nowIso, runId, 7);
+  }
+  updateStepOut.run(JSON.stringify(storyboard), nowIso, runId, 8);
+  if (assetsOut) updateStepOut.run(JSON.stringify(assetsOut), nowIso, runId, 9);
+  updateStepOut.run(JSON.stringify(sceneBuilderOut), nowIso, runId, 12);
+  if (previewOut) updateStepOut.run(JSON.stringify(previewOut), nowIso, runId, 13);
+  updateStepOut.run(JSON.stringify(rendererOut), nowIso, runId, 14);
+  updateStepOut.run(JSON.stringify(asmRes.output), nowIso, runId, 15);
+
+  emitRunEvent(runId, { type: 'run.completed', runId, rerolledSceneId: sceneId });
+
+  return {
+    ok: true,
+    runId,
+    sceneId,
+    storyboardScene: newSbScene,
+    snapshots: singlePreviewRes.output.snapshots,
+    assemblerOutput: asmRes.output,
+  };
 }

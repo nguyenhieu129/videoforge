@@ -8,6 +8,7 @@ import {
   ScriptSchema,
   ScoreSchema,
   StoryboardSchema,
+  VisualCueSchema,
 } from '../packages/core/src/index.js';
 import {
   detectGenderFromName,
@@ -16,8 +17,10 @@ import {
   type PoolVoice,
 } from '../packages/voice/src/index.js';
 import {
+  buildDefaultTimedCues,
   generateHyperFramesCompositionHtml,
   lintHyperFramesHtml,
+  sanitizeGenerativeStage,
 } from '../packages/engines/hyperframes/src/index.js';
 import { PLATFORM_LIMITS, validatePublishConstraints } from '../packages/publishers/src/index.js';
 
@@ -145,6 +148,7 @@ describe('VideoForge Unit & Golden Tests (Section 16)', () => {
       storyboard: {
         id: 'scene_1',
         engine: 'hyperframes' as const,
+        visualConcept: 'cyber_hud',
         layout: 'hero_headline' as const,
         palette: {
           primary: '#8B5CF6',
@@ -174,6 +178,41 @@ describe('VideoForge Unit & Golden Tests (Section 16)', () => {
 
     expect(lintHyperFramesHtml(html16x9, 'scene_1', '16:9')).toEqual([]);
     expect(lintHyperFramesHtml(html9x16, 'scene_1', '9:16')).toEqual([]);
+    expect(html9x16).toContain('padding: 200px 136px 380px 136px;');
+  });
+
+  it('validates VideoForge 2.0 VisualCueSchema, cue timing alignment, and HTML stage sanitizer', () => {
+    const cue = VisualCueSchema.parse({
+      triggerPhrase: 'tăng 4.5 lần',
+      displayHeadline: 'TĂNG 4.5 LẦN',
+      subLabel: 'Tốc độ suy luận AI',
+      effect: 'counter_stat',
+      sfx: 'impact',
+    });
+    expect(cue.effect).toBe('counter_stat');
+
+    const timed = buildDefaultTimedCues(
+      {
+        id: 'scene_1',
+        durationSec: 6,
+        onScreenText: 'Chip 2nm Đột Phá',
+        segments: [{ speaker: 'lead', text: 'Tốc độ suy luận tăng 4.5 lần chỉ trong 1 thế hệ.' }],
+        visualCues: [cue],
+      },
+      6,
+      [
+        { text: 'Tốc', start: 0, end: 0.4, speaker: 'lead' },
+        { text: 'tăng', start: 1.8, end: 2.2, speaker: 'lead' },
+        { text: '4.5', start: 2.2, end: 2.6, speaker: 'lead' },
+      ]
+    );
+    expect(timed[0]?.startSec).toBeGreaterThanOrEqual(0);
+    expect(timed[0]?.endSec).toBeGreaterThan(timed[0]?.startSec || 0);
+
+    const sanitized = sanitizeGenerativeStage('<div onclick="evil()">OK</div><script>bad()</script>', 'body { position: fixed; }');
+    expect(sanitized.html).not.toContain('<script>');
+    expect(sanitized.html).not.toContain('onclick');
+    expect(sanitized.css).toContain('position: absolute');
   });
 
   it('enforces platform limits for YouTube Shorts, Reels, TikTok, and YouTube 16:9', () => {

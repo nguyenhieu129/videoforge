@@ -34,6 +34,7 @@ import {
   resumePipelineRun,
   cancelPipelineRun,
   approveStepAndContinue,
+  rerollSingleScene,
   subscribeRunEvents,
   getMissedRunEvents,
 } from './orchestrator.js';
@@ -107,14 +108,14 @@ app.post('/api/projects', async (req) => {
 
   const approvalSteps: number[] = Array.isArray(body.approvalSteps)
     ? body.approvalSteps
-    : globalSettings.approvalSteps || [6, 8, 17];
+    : globalSettings.approvalSteps || [];
 
   const title = String(body.title || 'Video mới từ bài viết').trim();
   const sourceType = body.sourceType || 'text';
   const sourceRef = String(body.sourceRef || title).trim();
   const aspect = body.aspect || globalSettings.defaultAspect || 'both';
   const stylePreset = body.stylePreset || globalSettings.defaultStylePreset || 'neon_cyber';
-  const brandKitId = body.brandKitId || `bk_${stylePreset}`;
+  const brandKitId = body.brandKitId || null;
   const scoreThreshold = Number(body.scoreThreshold ?? globalSettings.defaultScoreThreshold ?? 5.0);
   const castMode = body.castMode || globalSettings.defaultCastMode || 'lead_accent';
   const castSelectionMode = body.castSelectionMode || globalSettings.castSelectionMode || 'auto_rotate';
@@ -185,6 +186,63 @@ app.post('/api/projects/:id/runs', async (req) => {
   const runId = createPipelineRun(id, { voiceCastSeed: body.voiceCastSeed });
   resumePipelineRun(runId, 1);
   return { runId };
+});
+
+// Hạng mục 5.1: Lưu chỉnh sửa nhanh Kịch bản & Điểm nhấn VisualCues
+app.put('/api/projects/:id/script', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = (req.body || {}) as any;
+
+  const latestRun = db
+    .prepare('SELECT * FROM runs WHERE projectId = ? ORDER BY startedAt DESC LIMIT 1')
+    .get(id) as any;
+  if (!latestRun) {
+    return reply.code(404).send({ error: 'Dự án chưa có phiên chạy nào chứa kịch bản' });
+  }
+
+  const step6 = db
+    .prepare('SELECT * FROM step_runs WHERE runId = ? AND stepIndex = 6')
+    .get(latestRun.id) as any;
+  const currentScript = step6?.outputJson ? JSON.parse(step6.outputJson) : {};
+  const nextScript = {
+    ...currentScript,
+    ...(body.hook !== undefined ? { hook: body.hook } : {}),
+    ...(body.cta !== undefined ? { cta: body.cta } : {}),
+    ...(Array.isArray(body.scenes) ? { scenes: body.scenes } : {}),
+  };
+
+  const nowIso = new Date().toISOString();
+  db.prepare(
+    "UPDATE step_runs SET outputJson = ?, status = 'done', finishedAt = COALESCE(finishedAt, ?) WHERE runId = ? AND stepIndex = 6"
+  ).run(JSON.stringify(nextScript), nowIso, latestRun.id);
+
+  const step7 = db
+    .prepare('SELECT * FROM step_runs WHERE runId = ? AND stepIndex = 7')
+    .get(latestRun.id) as any;
+  if (step7 && step7.outputJson && step7.outputJson !== '{}') {
+    const parsed7 = JSON.parse(step7.outputJson);
+    db.prepare('UPDATE step_runs SET outputJson = ? WHERE id = ?').run(
+      JSON.stringify({ ...parsed7, fixedScript: nextScript }),
+      step7.id
+    );
+  }
+
+  if (body.rerender) {
+    resumePipelineRun(latestRun.id, 10);
+  }
+
+  return { ok: true, runId: latestRun.id, script: nextScript, rerendering: Boolean(body.rerender) };
+});
+
+// Hạng mục 5.2: Đổi thiết kế / B-Roll / Hiệu ứng và Render lẻ đúng 1 cảnh
+app.post('/api/projects/:id/scenes/:sceneId/reroll', async (req, reply) => {
+  const { id, sceneId } = req.params as { id: string; sceneId: string };
+  try {
+    const res = await rerollSingleScene(id, sceneId, (req.body || {}) as any);
+    return res;
+  } catch (err: any) {
+    return reply.code(400).send({ ok: false, error: err?.message || 'Reroll failed' });
+  }
 });
 
 app.get('/api/runs/:id', async (req, reply) => {
@@ -599,6 +657,84 @@ app.put('/api/settings', async (req) => {
   const body = (req.body || {}) as any;
   const updated = updateGlobalSettings(body);
   return { settings: updated };
+});
+
+// Hạng mục 5.3: Thiết lập AI 1 Chạm (Lưu Provider + Gán Model cho toàn bộ LLM Agents)
+app.post('/api/settings/quick-setup', async (req) => {
+  const body = (req.body || {}) as any;
+  const id = body.providerId || 'prov_primary_ai';
+  const existing = getProviderRaw(id);
+
+  const name = String(body.name || existing?.name || '9router AI Gateway').trim();
+  const type = String(body.type || existing?.type || 'openai_compatible').trim() as any;
+  const baseUrl = String(body.baseUrl ?? existing?.baseUrl ?? 'http://localhost:20128/v1').trim();
+  const chosenModel = String(body.model || 'AllCombo').trim();
+
+  const encryptedKey =
+    body.apiKey && String(body.apiKey).trim() && !String(body.apiKey).includes('••••')
+      ? encryptSecret(String(body.apiKey).trim())
+      : existing?.apiKeyEncrypted || '';
+
+  const baseModels = Array.from(
+    new Set([chosenModel, ...(Array.isArray(body.models) ? body.models : existing?.models || [])])
+  ).filter(Boolean);
+
+  if (existing) {
+    db.prepare(`
+      UPDATE provider_configs
+      SET name = ?, type = ?, baseUrl = ?, apiKeyEncrypted = ?, modelsJson = ?, enabled = 1
+      WHERE id = ?
+    `).run(name, type, baseUrl, encryptedKey, JSON.stringify(baseModels), id);
+  } else {
+    db.prepare(`
+      INSERT INTO provider_configs (id, name, type, baseUrl, apiKeyEncrypted, modelsJson, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `).run(id, name, type, baseUrl, encryptedKey, JSON.stringify(baseModels));
+  }
+
+  const savedProv = getProviderRaw(id)!;
+  const connTest = await testProviderConnection(savedProv);
+  if (connTest.ok && connTest.models.length > 0) {
+    const mergedModels = Array.from(new Set([chosenModel, ...connTest.models]));
+    db.prepare('UPDATE provider_configs SET modelsJson = ? WHERE id = ?').run(
+      JSON.stringify(mergedModels),
+      id
+    );
+  }
+
+  // Tự động gán Model này làm mặc định cho toàn bộ Agent sử dụng LLM
+  const upsertMap = db.prepare(`
+    INSERT OR REPLACE INTO agent_model_maps (agent, providerId, model, temperature, fallbacksJson)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  for (const step of PIPELINE_STEPS) {
+    if (step.usesLlm) {
+      const temp =
+        step.agent === 'Scriptwriter'
+          ? 0.65
+          : step.agent === 'Director'
+            ? 0.55
+            : step.agent === 'SceneBuilder'
+              ? 0.35
+              : 0.25;
+      upsertMap.run(
+        step.agent,
+        id,
+        chosenModel,
+        temp,
+        JSON.stringify([{ providerId: 'provider_builtin', model: 'gpt-4o-mini' }])
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    providerId: id,
+    model: chosenModel,
+    connectionTest: connTest,
+    providers: listProvidersSafe(),
+  };
 });
 
 app.post('/api/brand-kits', async (req) => {

@@ -19,5 +19,8 @@
     "@videoforge/engine-blender": "workspace:*",
     "@videoforge/publishers": "workspace:*",
     "zod": "^3.24.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit"
   }
 }

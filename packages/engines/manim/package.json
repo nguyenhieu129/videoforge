@@ -10,5 +10,8 @@
   "dependencies": {
     "@videoforge/core": "workspace:*",
     "@videoforge/engine-hyperframes": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit"
   }
 }

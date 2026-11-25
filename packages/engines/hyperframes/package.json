@@ -10,5 +10,8 @@
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@videoforge/core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit"
   }
 }

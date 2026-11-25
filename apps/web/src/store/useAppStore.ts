@@ -1,40 +1,54 @@
 import { create } from 'zustand';
 
-export type NavTab =
-  | 'dashboard'
-  | 'create'
-  | 'pipeline'
-  | 'voice_studio'
-  | 'library'
-  | 'publish_queue'
-  | 'settings';
+export type WorkspaceSection = 'studio' | 'voices_assets' | 'settings';
+export type StudioCenterTab = 'script' | 'storyboard' | 'pipeline' | 'publish';
+
+// Giữ tương thích với các component phụ nếu cần
+export type NavTab = WorkspaceSection;
 
 interface VideoForgeStore {
-  activeTab: NavTab;
-  theme: 'dark' | 'light';
+  activeSection: WorkspaceSection;
+  studioTab: StudioCenterTab;
+  sidebarCollapsed: boolean;
+  createModalOpen: boolean;
+  selectedProjectId: string | null;
   activeRunId: string | null;
   selectedStepIndex: number;
-  setActiveTab: (tab: NavTab) => void;
-  toggleTheme: () => void;
-  openPipelineRun: (runId: string, stepIndex?: number) => void;
+  setActiveSection: (section: WorkspaceSection) => void;
+  setStudioTab: (tab: StudioCenterTab) => void;
+  toggleSidebar: () => void;
+  setCreateModalOpen: (open: boolean) => void;
+  selectProjectAndRun: (projectId: string | null, runId: string | null, tab?: StudioCenterTab) => void;
+  openPipelineRun: (runId: string, stepIndex?: number, projectId?: string) => void;
   setSelectedStepIndex: (stepIndex: number) => void;
 }
 
 export const useAppStore = create<VideoForgeStore>((set) => ({
-  activeTab: 'dashboard',
-  theme: 'dark',
+  activeSection: 'studio',
+  studioTab: 'pipeline',
+  sidebarCollapsed: false,
+  createModalOpen: false,
+  selectedProjectId: null,
   activeRunId: null,
   selectedStepIndex: 1,
-  setActiveTab: (activeTab) => set({ activeTab }),
-  toggleTheme: () =>
+  setActiveSection: (activeSection) => set({ activeSection }),
+  setStudioTab: (studioTab) => set({ studioTab }),
+  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setCreateModalOpen: (createModalOpen) => set({ createModalOpen }),
+  selectProjectAndRun: (selectedProjectId, activeRunId, tab) =>
     set((s) => ({
-      theme: s.theme === 'dark' ? 'light' : 'dark',
+      selectedProjectId,
+      activeRunId,
+      activeSection: 'studio',
+      studioTab: tab ?? s.studioTab,
     })),
-  openPipelineRun: (runId, stepIndex = 1) =>
-    set({
+  openPipelineRun: (runId, stepIndex = 1, projectId) =>
+    set((s) => ({
       activeRunId: runId,
       selectedStepIndex: stepIndex,
-      activeTab: 'pipeline',
-    }),
+      selectedProjectId: projectId ?? s.selectedProjectId,
+      activeSection: 'studio',
+      studioTab: 'pipeline',
+    })),
   setSelectedStepIndex: (selectedStepIndex) => set({ selectedStepIndex }),
 }));

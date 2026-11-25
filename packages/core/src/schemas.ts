@@ -271,6 +271,40 @@ export const StrategySchema = z.object({
 export type Strategy = z.infer<typeof StrategySchema>;
 
 // Step 6: Scriptwriter -> Script (Mục 6 & 8.3: phân vai lead/accent, onScreenText <= 8 từ)
+export const VisualCueEffectSchema = z.enum([
+  'slam_impact',
+  'marker_highlight',
+  'counter_stat',
+  'split_versus',
+  'glitch_focus',
+  'cinematic_minimal',
+  'terminal_type',
+]);
+export type VisualCueEffect = z.infer<typeof VisualCueEffectSchema>;
+
+export const SfxTypeSchema = z.enum(['impact', 'whoosh', 'pop', 'riser', 'click', 'none']);
+export type SfxType = z.infer<typeof SfxTypeSchema>;
+
+export const MusicMoodSchema = z.enum([
+  'cyber_tech',
+  'breaking_urgent',
+  'cinematic_story',
+  'finance_pulse',
+  'minimal_focus',
+]);
+export type MusicMood = z.infer<typeof MusicMoodSchema>;
+
+export const VisualCueSchema = z.object({
+  triggerPhrase: z.string(),
+  displayHeadline: z.string(),
+  subLabel: z.string().optional(),
+  effect: VisualCueEffectSchema.default('slam_impact'),
+  sfx: SfxTypeSchema.default('pop'),
+  startSec: z.number().optional(),
+  endSec: z.number().optional(),
+});
+export type VisualCue = z.infer<typeof VisualCueSchema>;
+
 export const ScriptSegmentSchema = z.object({
   speaker: z.enum(['lead', 'accent']),
   text: z.string().min(1),
@@ -284,6 +318,8 @@ export const ScriptSceneSchema = z.object({
   onScreenText: z.string(),
   durationSec: z.number().min(2).max(45),
   dataPoints: z.array(z.object({ label: z.string(), value: z.number() })).optional(),
+  visualCues: z.array(VisualCueSchema).optional(),
+  brollQuery: z.string().optional(),
 });
 export type ScriptScene = z.infer<typeof ScriptSceneSchema>;
 
@@ -312,15 +348,18 @@ export const StoryboardSceneSchema = z.object({
   id: z.string(),
   engine: z.enum(['hyperframes', 'remotion', 'manim', 'blender']).default('hyperframes'),
   remotionTemplate: z.enum(['BarChartRace', 'Counter', 'Leaderboard']).optional(),
-  layout: z.enum([
-    'hero_headline',
-    'split_comparison',
-    'stat_spotlight',
-    'quote_card',
-    'kinetic_typography',
-    'threejs_particles',
-    'chart_data',
-  ]),
+  visualConcept: z.string().default('cyber_hud'),
+  layout: z
+    .enum([
+      'hero_headline',
+      'split_comparison',
+      'stat_spotlight',
+      'quote_card',
+      'kinetic_typography',
+      'threejs_particles',
+      'chart_data',
+    ])
+    .default('kinetic_typography'),
   palette: z.object({
     primary: z.string(),
     secondary: z.string(),
@@ -330,6 +369,11 @@ export const StoryboardSceneSchema = z.object({
   }),
   transitions: z.enum(['fade', 'slide_up', 'zoom_burst', 'glitch', 'wipe']).default('slide_up'),
   useThreeJs: z.boolean().default(false),
+  bgImagePath: z.string().optional(),
+  brollVideoPath: z.string().optional(),
+  customHtmlStage: z.string().optional(),
+  customCss: z.string().optional(),
+  musicMood: MusicMoodSchema.optional(),
   assetsNeeded: z.array(z.string()).default([]),
   visualNotes: z.string().optional(),
 });
@@ -337,6 +381,8 @@ export type StoryboardScene = z.infer<typeof StoryboardSceneSchema>;
 
 export const StoryboardSchema = z.object({
   scenes: z.array(StoryboardSceneSchema).min(1),
+  musicMood: MusicMoodSchema.optional(),
+  artDirectionSummary: z.string().optional(),
 });
 export type Storyboard = z.infer<typeof StoryboardSchema>;
 
@@ -348,12 +394,14 @@ export const AssetsOutputSchema = z.object({
       path: z.string(),
       license: z.string(),
       source: z.string(),
+      mediaKind: z.enum(['article', 'broll_image', 'broll_video', 'vector']).optional(),
     })
   ),
   music: z.object({
     path: z.string(),
     title: z.string(),
     bpm: z.number(),
+    mood: MusicMoodSchema.optional(),
     license: z.string(),
   }),
   sfx: z.array(
@@ -364,6 +412,7 @@ export const AssetsOutputSchema = z.object({
       license: z.string(),
     })
   ),
+  sfxPack: z.record(z.string()).optional(),
 });
 export type AssetsOutput = z.infer<typeof AssetsOutputSchema>;
 
@@ -430,13 +479,29 @@ export const CaptionsOutputSchema = z.object({
 export type CaptionsOutput = z.infer<typeof CaptionsOutputSchema>;
 
 // Step 12: Scene Builder -> SceneCode[]
+export const SfxEventSchema = z.object({
+  sfx: SfxTypeSchema,
+  offsetMs: z.number(),
+  gain: z.number().optional(),
+});
+export type SfxEvent = z.infer<typeof SfxEventSchema>;
+
 export const SceneCodeItemSchema = z.object({
   sceneId: z.string(),
   engine: z.enum(['hyperframes', 'remotion', 'manim', 'blender']),
   durationSec: z.number(),
+  visualConcept: z.string().optional(),
+  bgImagePath: z.string().optional(),
+  brollVideoPath: z.string().optional(),
+  customHtmlStage: z.string().optional(),
+  customCss: z.string().optional(),
+  timedCues: z.array(VisualCueSchema).optional(),
+  sfxEvents: z.array(SfxEventSchema).optional(),
   html16x9: z.string().optional(),
   html9x16: z.string().optional(),
   remotionProps: z.record(z.any()).optional(),
+  remotionProps16x9: z.record(z.any()).optional(),
+  remotionProps9x16: z.record(z.any()).optional(),
   manimCode: z.string().optional(),
   blenderScript: z.string().optional(),
   dirPath: z.string(),
@@ -482,6 +547,7 @@ export const SceneClipItemSchema = z.object({
   width: z.number(),
   height: z.number(),
   engineUsed: z.string(),
+  muxedAudio: z.boolean().optional(),
   assetId: z.string().optional(),
 });
 export type SceneClipItem = z.infer<typeof SceneClipItemSchema>;
